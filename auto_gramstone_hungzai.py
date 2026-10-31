@@ -1,12 +1,14 @@
 """
 =============================================================================
- TOOL AUTO GRAMSTONE (@gramstone_bot) - TỰ ĐỘNG KHAI THÁC & CHƠI MINI GAMES
+ TOOL AUTO GRAMSTONE (@gramstone_bot) - TỰ ĐỘNG KHAI THÁC, NÂNG CẤP & GAMES
  - Dành riêng cho tài khoản: hungzai22
  - Tự động lấy x-telegram-init-data tươi mới qua Telethon (Không cần thủ công)
- - Tự động Điểm danh hàng ngày Streak (/api/streak/claim -> Nhận +10 GH/s)
- - Tự động Thu hoạch mỏ đào Vault (/api/claim -> Thu hoạch GRAM/TON)
+ - Tự động Điểm danh hàng ngày Streak (/api/streak/claim -> Nhận +10 -> +100 GH/s)
+ - Tự động Thu hoạch mỏ đào Vault (/api/claim -> Thu hoạch GRAM/TON khi đầy miễn phí)
+ - Tự động Nâng cấp 6 Dụng cụ đào mỏ qua quảng cáo (/api/equipment/upgrade)
  - Tự động Tap đào đá (/api/tap)
  - Tự động thắng 5 Mini Games (/api/game/start & /api/game/finish) để buff GH/s
+ - Hỗ trợ chạy 24/7 trên GitHub Actions hoặc máy tính cá nhân
 =============================================================================
 """
 
@@ -36,6 +38,15 @@ API_HASH = "f02b155d895a3a3fbf8a1cbe810b5338"
 STRING_SESSION = os.getenv("TELEGRAM_STRING_SESSION_ACC1") or "1BVtsOHIBuxmpWiBJ9hvwV9pSrzWw5U2I5Fe20Ww8l1LCk9rnsG6T6lLZEJXZE1JJC_qUH_yyWHnRoedRNI5lJYnfjRN4gyGeDrCxquDU12ZflrpCz0VLhMZx2C0LlyUCy2eHRSRE1wUCpEYZaymL0P7Z9eAHwMy4Oogewh5TqyO4x4MF6j0yTq8Zvfpv43O4aQDzErNv3GRqpx8DXBcOJIMP9yVhq-Mby5VH5J9cF-h-bJ5ws3xKjA4GY7YKjHxDt9OI-Zr7mr-V3qZy99UxJooThJj51f2RqOKhODdLh9XZQ0ygSoAd3iFAZDOPMEo8Ch5TrrzLXi2Q3N0HorIL1JfV0xoFQlY="
 
 API_BASE = "https://gramstone.46-101-143-24.sslip.io"
+
+EQUIP_NAMES = {
+    1: "Titanyum Kazma (Cuốc đá titan)",
+    2: "Satchel (Túi quặng)",
+    3: "Goggles (Kính bảo hộ)",
+    4: "Gauntlets (Găng tay đào)",
+    5: "Furnace (Lò luyện)",
+    6: "Chest (Rương kho báu)"
+}
 
 def log(tag, msg, color=Fore.WHITE):
     t_str = time.strftime('%H:%M:%S')
@@ -100,13 +111,65 @@ def build_headers_and_body(init_data):
     }
     return headers, body, user_obj
 
+def check_and_upgrade_equipment(headers, tg_id, equip_list):
+    """
+    Tự động nâng cấp 6 loại dụng cụ đào bằng cách xem quảng cáo.
+    """
+    log("EQUIP", "Kiểm tra và nâng cấp trang thiết bị mỏ đào...", Fore.CYAN)
+    if not equip_list:
+        return
+
+    for eq in equip_list:
+        slot = eq.get("slot")
+        name = EQUIP_NAMES.get(slot, f"Dụng cụ #{slot}")
+        lvl = eq.get("level", 0)
+        is_maxed = eq.get("isMaxed", False)
+        ads_prog = eq.get("adsProgress", 0)
+        req_ads = eq.get("reqAds", 1)
+
+        if is_maxed:
+            log("EQUIP", f"Slot {slot} [{name}]: Đã đạt cấp tối đa (MAX - Lv.{lvl})", Fore.GREEN)
+            continue
+
+        log("EQUIP", f"Slot {slot} [{name}]: Lv.{lvl} (Tiến độ QC: {ads_prog}/{req_ads})", Fore.YELLOW)
+
+        if ads_prog < req_ads:
+            try:
+                # 1. Báo bắt đầu xem quảng cáo
+                requests.post(f"{API_BASE}/api/ads/start", headers=headers, json={"telegram_id": tg_id}, verify=False, timeout=8)
+                time.sleep(7) # Yêu cầu tối thiểu 6s theo luật server
+
+                # 2. Gửi request nâng cấp
+                payload = {
+                    "telegram_id": tg_id,
+                    "slot": slot,
+                    "mode": "ad",
+                    "ad_network": "richads"
+                }
+                r_up = requests.post(f"{API_BASE}/api/equipment/upgrade", headers=headers, json=payload, verify=False, timeout=10).json()
+                if r_up.get("ok"):
+                    log("EQUIP_UP", f"Nâng cấp thành công {name}! {Fore.GREEN}{r_up.get('message', 'Thành công')}{Style.RESET_ALL}", Fore.GREEN)
+                else:
+                    err = r_up.get("error", "")
+                    if "richads_cap" in str(r_up.get("code", "")) or "Bugünkü yedek reklam" in err:
+                        log("EQUIP_INFO", f"Slot {slot} [{name}]: Đạt giới hạn quota quảng cáo dự phòng hôm nay ({ads_prog}/{req_ads} QC). Cần xem Adsgram trên app hoặc chờ sang ngày mới.", Fore.YELLOW)
+                        break
+                    elif "Adsgram" in err:
+                        log("EQUIP_INFO", f"Slot {slot} [{name}]: Cần xác thực Adsgram từ ứng dụng Telegram ({ads_prog}/{req_ads} QC).", Fore.YELLOW)
+                    else:
+                        log("EQUIP_WARN", f"Slot {slot} [{name}]: {err}", Fore.YELLOW)
+            except Exception as e:
+                log("EQUIP_ERR", f"Lỗi nâng cấp slot {slot}: {e}", Fore.YELLOW)
+            time.sleep(2)
+
 def run_gramstone():
     print(f"""
 {Fore.CYAN}======================================================================
      TOOL AUTO GRAMSTONE MINING (@gramstone_bot)
      - Tự động lấy x-telegram-init-data (short_name='mine')
      - Tự động Đăng nhập & Báo danh Streak nhận GH/s
-     - Tự động Thu hoạch mỏ đào (Vault Claim)
+     - Tự động Thu hoạch mỏ đào (Vault Claim khi 100% đầy)
+     - Tự động Nâng cấp Dụng cụ đào mỏ qua QC (Equipment Upgrade)
      - Tự động Tap đào đá
      - Tự động Chơi Mini Games buff tốc độ đào GH/s
 ======================================================================{Style.RESET_ALL}
@@ -130,6 +193,7 @@ def run_gramstone():
         data = r_auth.json()
         u = data.get("user", {})
         m = data.get("mining", {})
+        equip_list = data.get("equipment", [])
         log("PROFILE", f"Đăng nhập thành công: {Fore.YELLOW}{u.get('username') or tg_id}{Style.RESET_ALL}", Fore.GREEN)
         log("WALLET", f"Số dư: {Fore.GREEN}{u.get('balance', 0):.8f} TON/GRAM{Style.RESET_ALL} | Tốc độ đào: {Fore.CYAN}{m.get('totalGhs', 0)} GH/s{Style.RESET_ALL}")
     except Exception as e:
@@ -141,37 +205,47 @@ def run_gramstone():
         r_streak = requests.post(f"{API_BASE}/api/streak/claim", headers=headers, json={}, verify=False, timeout=10).json()
         if r_streak.get("ok"):
             log("STREAK", f"Điểm danh Streak thành công! {Fore.GREEN}+{r_streak.get('rewardGhs')} GH/s{Style.RESET_ALL} (Ngày {r_streak.get('streakDay')})", Fore.GREEN)
+        else:
+            log("STREAK", f"Trạng thái điểm danh: {r_streak.get('error', 'Đã điểm danh hôm nay')}", Fore.LIGHTBLACK_EX)
     except Exception:
         pass
 
     # 2. Thu hoạch hầm chứa (Vault Claim)
     try:
-        r_claim = requests.post(f"{API_BASE}/api/claim", headers=headers, json={}, verify=False, timeout=10).json()
-        if r_claim.get("ok"):
-            log("CLAIM", f"Thu hoạch Vault thành công! {Fore.GREEN}+{r_claim.get('claimedTon', 0):.8f} TON/GRAM{Style.RESET_ALL}", Fore.GREEN)
+        is_full = m.get("isFull", False)
+        rem_sec = m.get("remainingSec", 0)
+        if is_full:
+            r_claim = requests.post(f"{API_BASE}/api/claim", headers=headers, json={"telegram_id": tg_id, "watched_ad": False}, verify=False, timeout=10).json()
+            if r_claim.get("ok"):
+                log("CLAIM", f"Thu hoạch Vault thành công! {Fore.GREEN}+{r_claim.get('claimedAmount', 0):.8f} TON/GRAM{Style.RESET_ALL}", Fore.GREEN)
+            else:
+                log("CLAIM", f"Trạng thái hầm đào: {r_claim.get('error')}", Fore.YELLOW)
         else:
-            log("CLAIM", f"Trạng thái hầm đào: {r_claim.get('error', 'Chưa đầy')}", Fore.YELLOW)
-    except Exception:
-        pass
+            log("CLAIM", f"Hầm khoang đào chưa đầy: Đang đào {m.get('progressPercent', 0):.1f}% (Còn khoảng {rem_sec // 60} phút nữa sẽ đầy)", Fore.LIGHTBLACK_EX)
+    except Exception as e:
+        log("WARN", f"Lỗi kiểm tra Vault: {e}", Fore.YELLOW)
 
-    # 3. Tap đào đá
+    # 3. Nâng cấp dụng cụ đào mỏ qua quảng cáo
+    check_and_upgrade_equipment(headers, tg_id, equip_list)
+
+    # 4. Tap đào đá
     log("TAP", "Bắt đầu tap đào đá...", Fore.CYAN)
     taps_done = 0
-    while taps_done < 20:
+    while taps_done < 25:
         try:
             r_tap = requests.post(f"{API_BASE}/api/tap", headers=headers, json={}, verify=False, timeout=8).json()
             if r_tap.get("ok"):
                 msg = r_tap.get("message", "")
                 taps_done += 1
                 log("TAP", f"Tap thành công: {Fore.GREEN}{msg}{Style.RESET_ALL} ({r_tap.get('tapsToday')}/{r_tap.get('dailyLimit')})")
-                time.sleep(random.uniform(2.1, 2.5))
+                time.sleep(random.uniform(2.1, 2.4))
             else:
                 log("TAP", f"Dừng tap: {r_tap.get('error')}", Fore.YELLOW)
                 break
         except Exception:
             break
 
-    # 4. Chơi Mini Games để tăng tốc độ đào GH/s
+    # 5. Chơi Mini Games để tăng tốc độ đào GH/s
     log("GAMES", "Kiểm tra và chơi Mini Games để buff tốc độ đào...", Fore.CYAN)
     game_list = ["jetpack", "breaker", "catcher", "memory", "match3"]
     for g_name in game_list:
@@ -188,7 +262,7 @@ def run_gramstone():
                 else:
                     log("GAME_ERR", f"Lỗi hoàn thành game: {r_finish.get('error')}", Fore.YELLOW)
             else:
-                log("GAME_SKIP", f"Game {g_name}: {r_start.get('error', 'Chưa sẵn sàng')}", Fore.YELLOW)
+                log("GAME_SKIP", f"Game {g_name}: {r_start.get('error', 'Chưa sẵn sàng')}", Fore.LIGHTBLACK_EX)
             time.sleep(2)
         except Exception as e:
             log("WARN", f"Lỗi chơi game {g_name}: {e}", Fore.YELLOW)
