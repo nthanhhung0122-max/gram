@@ -3,7 +3,7 @@ name: Auto Gramstone Hungzai 24/7
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *'  # Chạy mỗi 30 phút để canh hầm đào 60p đầy, tap và chơi games buff GH/s
+    - cron: '*/30 * * * *'
 
 jobs:
   run-gramstone-hungzai:
@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests telethon colorama
 
       - name: Chay Auto Gramstone Cho Acc Hungzai
         env:
