@@ -228,22 +228,32 @@ def run_gramstone():
     # 3. Nâng cấp dụng cụ đào mỏ qua quảng cáo
     check_and_upgrade_equipment(headers, tg_id, equip_list)
 
-    # 4. Tap đào đá
-    log("TAP", "Bắt đầu tap đào đá...", Fore.CYAN)
-    taps_done = 0
-    while taps_done < 25:
+    # 4. Tap đào đá liên tục cho đến khi đủ lượt ngày (240/240)
+    log("TAP", "Bắt đầu tap đào đá liên tục cho đến khi hết lượt trong ngày...", Fore.CYAN)
+    err_count = 0
+    while True:
         try:
-            r_tap = requests.post(f"{API_BASE}/api/tap", headers=headers, json={}, verify=False, timeout=8).json()
+            r_tap = requests.post(f"{API_BASE}/api/tap", headers=headers, json={}, verify=False, timeout=10).json()
             if r_tap.get("ok"):
+                err_count = 0
                 msg = r_tap.get("message", "")
-                taps_done += 1
-                log("TAP", f"Tap thành công: {Fore.GREEN}{msg}{Style.RESET_ALL} ({r_tap.get('tapsToday')}/{r_tap.get('dailyLimit')})")
-                time.sleep(random.uniform(2.1, 2.4))
+                t_today = r_tap.get("tapsToday", 0)
+                d_limit = r_tap.get("dailyLimit", 240)
+                log("TAP", f"Tap thành công: {Fore.GREEN}{msg}{Style.RESET_ALL} ({t_today}/{d_limit})")
+                if t_today >= d_limit:
+                    log("TAP", f"Đã hoàn thành toàn bộ lượt tap hôm nay ({t_today}/{d_limit})!", Fore.GREEN)
+                    break
+                time.sleep(random.uniform(2.1, 2.3))
             else:
-                log("TAP", f"Dừng tap: {r_tap.get('error')}", Fore.YELLOW)
+                err = r_tap.get("error", "Đã hết lượt tap hôm nay")
+                log("TAP", f"Dừng tap: {Fore.YELLOW}{err}{Style.RESET_ALL}")
                 break
-        except Exception:
-            break
+        except Exception as e:
+            err_count += 1
+            log("WARN", f"Mạng chập chờn khi tap ({err_count}/3): {e}", Fore.YELLOW)
+            if err_count >= 3:
+                break
+            time.sleep(2.5)
 
     # 5. Chơi Mini Games để tăng tốc độ đào GH/s
     log("GAMES", "Kiểm tra và chơi Mini Games để buff tốc độ đào...", Fore.CYAN)
