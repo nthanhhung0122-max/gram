@@ -3,12 +3,12 @@ name: Auto Gramstone Hungzai 24/7
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 */5 * * *'  # Tự động thay ca mỗi 5 tiếng để chạy 24/7 không gián đoạn
 
 jobs:
   run-gramstone-hungzai:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 350  # Chạy liên tục ca trực 5.4 tiếng (5 lần claim 1h)
 
     steps:
       - name: Checkout repository
