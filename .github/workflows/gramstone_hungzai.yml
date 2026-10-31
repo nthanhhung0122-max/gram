@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '0 */5 * * *'  # Tự động thay ca mỗi 5 tiếng để chạy 24/7 không gián đoạn
 
+concurrency:
+  group: gramstone-hungzai-run
+  cancel-in-progress: true
+
 jobs:
   run-gramstone-hungzai:
     runs-on: ubuntu-latest
@@ -22,12 +26,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests telethon colorama
+          pip install requests telethon colorama urllib3
 
-      - name: Chay Auto Gramstone Cho Acc Hungzai
+      - name: "Chay Auto Gramstone Cho Acc Hungzai"
         env:
           PYTHONUNBUFFERED: "1"
           PYTHONIOENCODING: "utf-8"
-          TELEGRAM_STRING_SESSION_ACC1: ${{ secrets.TELEGRAM_STRING_SESSION_ACC1 }}
+          TELEGRAM_STRING_SESSION_ACC1: ${{ secrets.TELEGRAM_STRING_SESSION_ACC1 || secrets.TELEGRAM_STRING_SESSION || secrets.STRING_SESSION }}
         run: |
           python auto_gramstone_hungzai.py
