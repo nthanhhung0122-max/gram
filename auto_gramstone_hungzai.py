@@ -1,12 +1,13 @@
 """
 =============================================================================
- TOOL AUTO GRAMSTONE (@gramstone_bot) - TỰ ĐỘNG KHAI THÁC, NÂNG CẤP & GAMES 24/7
+ TOOL AUTO GRAMSTONE (@gramstone_bot) - TỰ ĐỘNG KHAI THÁC, NÂNG CẤP & QC 24/7
  - Dành riêng cho tài khoản: hungzai22
- - Tự động lặp lại liên tục: CANH VÀ THU HOẠCH (CLAIM) MỎ ĐÀO MỖI 1 GIỜ (3600s)
- - Tự động lấy x-telegram-init-data tươi mới qua Telethon ở mỗi chu kỳ
+ - Canh và tự động THU HOẠCH (CLAIM) mỏ đào MỖI 1 GIỜ (3600s)
  - Tự động Điểm danh hàng ngày Streak (/api/streak/claim -> Nhận +10 -> +100 GH/s)
- - Tự động Thu hoạch mỏ đào Vault khi đầy 100% (Hoàn toàn miễn phí 0 cần xem QC)
- - Tự động Nâng cấp 6 Dụng cụ đào mỏ qua quảng cáo (/api/equipment/upgrade)
+ - Tự động Thu hoạch mỏ đào Vault khi đầy 100% (0 cần xem QC)
+ - Tự động NÂNG CẤP DUY NHẤT XE MỎ (Slot 6: Armored Bullion Minecart / Zırhlı Maden Vagonu)
+ - Tự động XEM QUẢNG CÁO 45 LƯỢT/NGÀY (/api/ads/reward: +0.5 GH/s mỗi 5 phút + bậc thang Ad Ladder)
+ - Tự động ĐỒNG BỘ SURVEYS & TIMEWALL (/api/timewall/surveys) & HOÀN THÀNH NHIỆM VỤ (/api/tasks/complete)
  - Tự động Tap đào đá liên tục cho tới khi đủ 240/240 lượt trong ngày
  - Tự động thắng 5 Mini Games (/api/game/start & /api/game/finish) để buff GH/s
  - Hỗ trợ chạy liên tục 24/7 trên GitHub Actions hoặc máy tính cá nhân
@@ -36,18 +37,15 @@ init(autoreset=True)
 # THÔNG TIN TELEGRAM API
 API_ID = 39182276
 API_HASH = "f02b155d895a3a3fbf8a1cbe810b5338"
-STRING_SESSION = os.getenv("TELEGRAM_STRING_SESSION_ACC1") or "1BVtsOHIBuxmpWiBJ9hvwV9pSrzWw5U2I5Fe20Ww8l1LCk9rnsG6T6lLZEJXZE1JJC_qUH_yyWHnRoedRNI5lJYnfjRN4gyGeDrCxquDU12ZflrpCz0VLhMZx2C0LlyUCy2eHRSRE1wUCpEYZaymL0P7Z9eAHwMy4Oogewh5TqyO4x4MF6j0yTq8Zvfpv43O4aQDzErNv3GRqpx8DXBcOJIMP9yVhq-Mby5VH5J9cF-h-bJ5ws3xKjA4GY7YKjHxDt9OI-Zr7mr-V3qZy99UxJooThJj51f2RqOKhODdLh9XZQ0ygSoAd3iFAZDOPMEo8Ch5TrrzLXi2Q3N0HorIL1JfV0xoFQlY="
+STRING_SESSION = (
+    os.getenv("TELEGRAM_STRING_SESSION_ACC1")
+    or os.getenv("TELEGRAM_STRING_SESSION")
+    or os.getenv("TELEGRAM_SESSION_B64_ACC1")
+    or os.getenv("STRING_SESSION")
+    or "1BVtsOHIBuxmpWiBJ9hvwV9pSrzWw5U2I5Fe20Ww8l1LCk9rnsG6T6lLZEJXZE1JJC_qUH_yyWHnRoedRNI5lJYnfjRN4gyGeDrCxquDU12ZflrpCz0VLhMZx2C0LlyUCy2eHRSRE1wUCpEYZaymL0P7Z9eAHwMy4Oogewh5TqyO4x4MF6j0yTq8Zvfpv43O4aQDzErNv3GRqpx8DXBcOJIMP9yVhq-Mby5VH5J9cF-h-bJ5ws3xKjA4GY7YKjHxDt9OI-Zr7mr-V3qZy99UxJooThJj51f2RqOKhODdLh9XZQ0ygSoAd3iFAZDOPMEo8Ch5TrrzLXi2Q3N0HorIL1JfV0xoFQlY="
+)
 
 API_BASE = "https://gramstone.46-101-143-24.sslip.io"
-
-EQUIP_NAMES = {
-    1: "Titanyum Kazma (Cuốc đá titan)",
-    2: "Satchel (Túi quặng)",
-    3: "Goggles (Kính bảo hộ)",
-    4: "Gauntlets (Găng tay đào)",
-    5: "Furnace (Lò luyện)",
-    6: "Chest (Rương kho báu)"
-}
 
 def log(tag, msg, color=Fore.WHITE):
     t_str = time.strftime('%H:%M:%S')
@@ -112,76 +110,196 @@ def build_headers_and_body(init_data):
     }
     return headers, body, user_obj
 
-def check_and_upgrade_equipment(headers, tg_id, equip_list):
+# =============================================================================
+# 1. NÂNG CẤP DUY NHẤT XE MỎ (SLOT 6: Zırhlı Maden Vagonu / Armored Minecart)
+# =============================================================================
+def check_and_upgrade_minecart(headers, tg_id, equip_list):
     """
-    Tự động nâng cấp 6 loại dụng cụ đào bằng cách xem quảng cáo.
+    Theo yêu cầu người dùng: CHỈ XEM VIDEO ĐỂ NÂNG CẤP XE MỎ (Slot 6: Armored Minecart).
+    Bỏ qua toàn bộ các slot 1, 2, 3, 4, 5.
     """
     if not equip_list:
         return
 
-    for eq in equip_list:
-        slot = eq.get("slot")
-        name = EQUIP_NAMES.get(slot, f"Dụng cụ #{slot}")
-        lvl = eq.get("level", 0)
-        is_maxed = eq.get("isMaxed", False)
-        ads_prog = eq.get("adsProgress", 0)
-        req_ads = eq.get("reqAds", 1)
+    # Tìm đúng Slot 6 (Xe mỏ)
+    slot6 = next((eq for eq in equip_list if eq.get("slot") == 6), None)
+    if not slot6:
+        log("EQUIP", "Không tìm thấy thông tin Xe mỏ (Slot 6).", Fore.YELLOW)
+        return
 
-        if is_maxed:
-            continue
+    lvl = slot6.get("level", 0)
+    max_lvl = slot6.get("maxLevel", 5)
+    is_maxed = slot6.get("isMaxed", False)
+    ads_prog = slot6.get("adsProgress", 0)
+    req_ads = slot6.get("reqAds", 6)
+    is_unlocked = slot6.get("isUnlocked", False)
 
-        if ads_prog < req_ads:
+    log("MINE_CART", f"Xe mỏ (Slot 6): Level {lvl}/{max_lvl} | Đã xem QC: {ads_prog}/{req_ads} | Mở khóa: {is_unlocked}", Fore.CYAN)
+
+    if is_maxed or lvl >= max_lvl:
+        log("MINE_CART", f"Xe mỏ đã đạt cấp tối đa (Level {lvl}/{max_lvl})!", Fore.GREEN)
+        return
+
+    if ads_prog < req_ads:
+        try:
+            log("MINE_CART", f"Bắt đầu xem quảng cáo nâng cấp Xe mỏ ({ads_prog + 1}/{req_ads})...", Fore.YELLOW)
+            requests.post(f"{API_BASE}/api/ads/start", headers=headers, json={"telegram_id": tg_id}, verify=False, timeout=8)
+            time.sleep(7)  # Yêu cầu tối thiểu 6s theo luật máy chủ
+
+            payload = {
+                "telegram_id": tg_id,
+                "slot": 6,
+                "mode": "ad",
+                "ad_network": "richads"
+            }
+            r_up = requests.post(f"{API_BASE}/api/equipment/upgrade", headers=headers, json=payload, verify=False, timeout=10).json()
+            if r_up.get("ok"):
+                new_msg = r_up.get("message", "Thành công")
+                log("MINE_CART", f"Nâng cấp Xe mỏ thành công! {Fore.GREEN}{new_msg}{Style.RESET_ALL}", Fore.GREEN)
+            else:
+                err = r_up.get("error", "")
+                code = r_up.get("code", "")
+                if "richads_cap" in code or "Bugünkü yedek reklam" in err:
+                    log("MINE_CART", f"Quota QC dự phòng cho Xe mỏ hôm nay đã hết ({ads_prog}/{req_ads}). Sẽ tự động nâng tiếp vào ngày mai!", Fore.LIGHTBLACK_EX)
+                elif "ad_unverified" in code or "Adsgram" in err:
+                    log("MINE_CART", f"Cần xác thực Adsgram trong Mini App Telegram ({ads_prog}/{req_ads} QC).", Fore.LIGHTBLACK_EX)
+                else:
+                    log("MINE_CART", f"Trạng thái nâng cấp Xe mỏ: {err}", Fore.LIGHTBLACK_EX)
+        except Exception as e:
+            log("MINE_CART", f"Lỗi xem QC Xe mỏ: {e}", Fore.LIGHTBLACK_EX)
+
+# =============================================================================
+# 2. XEM QUẢNG CÁO HÀNG NGÀY (45 QC / NGÀY - TĂNG +0.5 GH/s + AD LADDER)
+# =============================================================================
+def check_and_watch_ad_45(headers, tg_id, user_data, config):
+    """
+    Tự động xem quảng cáo nhận +0.5 GH/s (Giới hạn tối đa 45 cái/ngày, cooldown 300s = 5 phút).
+    Đồng thời nhận thưởng Ad Ladder ở các mốc 5, 10, 20, 30, 45 QC.
+    """
+    watched_today = user_data.get("ads_watched_today", 0)
+    daily_limit = config.get("watch_ad_daily_limit", 45)
+    last_ad_at = user_data.get("last_ad_at", 0)
+    cooldown_sec = config.get("watch_ad_cooldown_sec", 300)
+    reward_ghs = config.get("watch_ad_reward_ghs", 0.5)
+
+    if watched_today >= daily_limit:
+        log("WATCH_AD", f"Đã hoàn thành toàn bộ chỉ tiêu {watched_today}/{daily_limit} quảng cáo hôm nay!", Fore.GREEN)
+        return False
+
+    elapsed = (time.time() * 1000 - last_ad_at) / 1000
+    if elapsed < cooldown_sec:
+        remain_wait = int(cooldown_sec - elapsed)
+        log("WATCH_AD", f"Tiến độ QC hôm nay: {Fore.YELLOW}{watched_today}/{daily_limit}{Style.RESET_ALL} (Còn cooldown {Fore.CYAN}{remain_wait}s{Style.RESET_ALL} nữa mới được xem tiếp).", Fore.LIGHTBLACK_EX)
+        return False
+
+    try:
+        log("WATCH_AD", f"Bắt đầu xem quảng cáo #{watched_today + 1}/{daily_limit} để nhận +{reward_ghs} GH/s...", Fore.YELLOW)
+        requests.post(f"{API_BASE}/api/ads/start", headers=headers, json={"telegram_id": tg_id}, verify=False, timeout=8)
+        time.sleep(7)
+
+        payload = {
+            "telegram_id": tg_id,
+            "ad_network": "richads"
+        }
+        r_ad = requests.post(f"{API_BASE}/api/ads/reward", headers=headers, json=payload, verify=False, timeout=10).json()
+        if r_ad.get("ok"):
+            new_ghs = r_ad.get("rewardGhs", reward_ghs)
+            user_data["ads_watched_today"] = watched_today + 1
+            user_data["last_ad_at"] = time.time() * 1000
+            log("WATCH_AD", f"Xem QC #{watched_today + 1}/{daily_limit} thành công! {Fore.GREEN}+{new_ghs} GH/s{Style.RESET_ALL}", Fore.GREEN)
+            return True
+        else:
+            err = r_ad.get("error", "")
+            code = r_ad.get("code", "")
+            if "richads_cap" in code or "Bugünkü yedek reklam" in err:
+                log("WATCH_AD", f"Hạn mức QC dự phòng hôm nay đã hết ({watched_today}/{daily_limit}). Sẽ tiếp tục vào ngày mai!", Fore.LIGHTBLACK_EX)
+            else:
+                log("WATCH_AD", f"Trạng thái xem QC: {err}", Fore.LIGHTBLACK_EX)
+            return False
+    except Exception as e:
+        log("WATCH_AD", f"Lỗi xem quảng cáo: {e}", Fore.LIGHTBLACK_EX)
+        return False
+
+# =============================================================================
+# 3. ĐỒNG BỘ SURVEYS & TIMEWALL & HOÀN THÀNH NHIỆM VỤ
+# =============================================================================
+def process_surveys_and_tasks(headers, tg_id, user_obj, tasks_list):
+    """
+    Tự động đồng bộ các khảo sát Timewall Surveys và hoàn thành các nhiệm vụ Tasks.
+    """
+    # 1. Đồng bộ Timewall Surveys
+    try:
+        tw_payload = {
+            "telegram_id": tg_id,
+            "username": user_obj.get("username", ""),
+            "first_name": user_obj.get("first_name", ""),
+            "sw": 393,
+            "sh": 873,
+            "force": True
+        }
+        r_tw = requests.post(f"{API_BASE}/api/timewall/surveys", headers=headers, json=tw_payload, verify=False, timeout=10).json()
+        if r_tw.get("ok"):
+            s_count = len(r_tw.get("surveys", []))
+            has_pre = r_tw.get("prescreener", False)
+            log("SURVEY", f"Đồng bộ Timewall Surveys thành công: {s_count} khảo sát sẵn sàng (Prescreener: {has_pre})", Fore.GREEN)
+        else:
+            log("SURVEY", f"Khảo sát Timewall: {r_tw.get('error', 'Chưa có khảo sát mới')}", Fore.LIGHTBLACK_EX)
+    except Exception as e:
+        log("SURVEY", f"Lỗi đồng bộ khảo sát: {e}", Fore.LIGHTBLACK_EX)
+
+    # 2. Hoàn thành các nhiệm vụ Tasks khả dụng
+    if not tasks_list:
+        return
+
+    for t in tasks_list:
+        t_id = t.get("id")
+        t_title = t.get("title", f"Task #{t_id}")
+        is_done = t.get("isCompleted", False)
+        is_active = t.get("is_active", 0)
+
+        if not is_done and is_active:
             try:
-                # 1. Báo bắt đầu xem quảng cáo
-                requests.post(f"{API_BASE}/api/ads/start", headers=headers, json={"telegram_id": tg_id}, verify=False, timeout=8)
-                time.sleep(7) # Yêu cầu tối thiểu 6s theo luật server
-
-                # 2. Gửi request nâng cấp
                 payload = {
                     "telegram_id": tg_id,
-                    "slot": slot,
-                    "mode": "ad",
+                    "task_id": t_id,
                     "ad_network": "richads"
                 }
-                r_up = requests.post(f"{API_BASE}/api/equipment/upgrade", headers=headers, json=payload, verify=False, timeout=10).json()
-                if r_up.get("ok"):
-                    log("EQUIP_UP", f"Nâng cấp thành công {name}! {Fore.GREEN}{r_up.get('message', 'Thành công')}{Style.RESET_ALL}", Fore.GREEN)
+                r_task = requests.post(f"{API_BASE}/api/tasks/complete", headers=headers, json=payload, verify=False, timeout=10).json()
+                if r_task.get("ok"):
+                    log("TASK", f"Hoàn thành nhiệm vụ [{t_title}]! {Fore.GREEN}+{r_task.get('rewardGhs', 0)} GH/s{Style.RESET_ALL}", Fore.GREEN)
                 else:
-                    err = r_up.get("error", "")
-                    if "richads_cap" in str(r_up.get("code", "")) or "Bugünkü yedek reklam" in err:
-                        log("EQUIP_INFO", f"Slot {slot} [{name}]: Đạt quota QC dự phòng ({ads_prog}/{req_ads}). Cần xem Adsgram trên app hoặc chờ ngày mới.", Fore.LIGHTBLACK_EX)
-                        break
-                    elif "Adsgram" in err:
-                        log("EQUIP_INFO", f"Slot {slot} [{name}]: Cần xác thực Adsgram từ ứng dụng Telegram ({ads_prog}/{req_ads} QC).", Fore.LIGHTBLACK_EX)
-                    else:
-                        log("EQUIP_WARN", f"Slot {slot} [{name}]: {err}", Fore.LIGHTBLACK_EX)
+                    err = r_task.get("error", "Chưa hoàn tất")
+                    log("TASK", f"Nhiệm vụ [{t_title}]: {err}", Fore.LIGHTBLACK_EX)
+                time.sleep(1.5)
             except Exception as e:
-                log("EQUIP_ERR", f"Lỗi nâng cấp slot {slot}: {e}", Fore.LIGHTBLACK_EX)
-            time.sleep(1)
+                log("TASK", f"Lỗi làm nhiệm vụ [{t_title}]: {e}", Fore.LIGHTBLACK_EX)
 
+# =============================================================================
+# CHƯƠNG TRÌNH CHÍNH (VÒNG LẶP KHAI THÁC 24/7)
+# =============================================================================
 def run_gramstone():
     print(f"""
 {Fore.CYAN}======================================================================
      TOOL AUTO GRAMSTONE MINING 24/7 (@gramstone_bot)
-     - Canh và tự động Thu hoạch (Claim) mỏ đào MỖI 1 GIỜ (3600s)
-     - Tự động lấy x-telegram-init-data tươi mới mỗi chu kỳ
+     - Tự động Thu hoạch (Claim) mỏ đào MỖI 1 GIỜ (3600s)
      - Tự động Đăng nhập & Báo danh Streak nhận GH/s
+     - Tự động NÂNG CẤP DUY NHẤT XE MỎ (Slot 6) qua QC
+     - Tự động XEM QUẢNG CÁO 45 LƯỢT/NGÀY (+0.5 GH/s + Ad Ladder)
+     - Tự động ĐỒNG BỘ SURVEYS & TIMEWALL & TASKS
      - Tự động Tap đào đá liên tục cho tới khi đủ 240/240
-     - Tự động Nâng cấp Dụng cụ đào mỏ qua QC (Equipment Upgrade)
      - Tự động Chơi Mini Games buff tốc độ đào GH/s
 ======================================================================{Style.RESET_ALL}
     """)
 
     cycle = 1
     start_time = time.time()
-    # Nếu chạy trên GitHub Actions thì giới hạn 5.4 tiếng (~19500s) để ca sau vào thay thế mượt mà
-    # Nếu chạy trên máy tính thì chạy vô hạn (0)
+    # Chạy ca trực trên GitHub Actions tối đa 5.4 tiếng (~19500s)
     MAX_RUNTIME = 19500 if os.getenv("GITHUB_ACTIONS") else 0
 
     while True:
         try:
             if MAX_RUNTIME > 0 and (time.time() - start_time) >= MAX_RUNTIME:
-                log("DONE", f"Hoàn thành ca làm việc {MAX_RUNTIME//3600} tiếng trên GitHub Actions. Nghỉ ngơi chuyển giao ca trực!", Fore.GREEN)
+                log("DONE", f"Hoàn thành ca làm việc {MAX_RUNTIME//3600} tiếng trên GitHub Actions. Chuyển ca trực tiếp theo!", Fore.GREEN)
                 break
 
             print("\n" + "=" * 60)
@@ -209,8 +327,10 @@ def run_gramstone():
                 data = r_auth.json()
                 u = data.get("user", {})
                 m = data.get("mining", {})
+                cfg = data.get("config", {})
+                tasks_list = data.get("tasks", [])
                 equip_list = data.get("equipment", [])
-                log("PROFILE", f"Đăng nhập: {Fore.YELLOW}{u.get('username') or tg_id}{Style.RESET_ALL} | Số dư: {Fore.GREEN}{u.get('balance', 0):.8f} TON/GRAM{Style.RESET_ALL} | Tốc độ: {Fore.CYAN}{m.get('totalGhs', 0)} GH/s{Style.RESET_ALL}", Fore.GREEN)
+                log("PROFILE", f"Đăng nhập: {Fore.YELLOW}{u.get('username') or tg_id}{Style.RESET_ALL} | Số dư: {Fore.GREEN}{u.get('balance', 0):.8f} TON/GRAM{Style.RESET_ALL} | Tốc độ: {Fore.CYAN}{m.get('totalGhs', 0)} GH/s{Style.RESET_ALL} | QC hôm nay: {u.get('ads_watched_today', 0)}/45", Fore.GREEN)
             except Exception as e:
                 log("ERR", f"Lỗi kết nối /api/auth: {e}. Chờ 60s...", Fore.RED)
                 time.sleep(60)
@@ -245,10 +365,16 @@ def run_gramstone():
                 mined = m.get("pendingMinedTon", 0)
                 log("CLAIM", f"Hầm mỏ đang tích lũy: {Fore.YELLOW}{pct:.1f}%{Style.RESET_ALL} (+{mined:.8f} GRAM) - Còn {Fore.CYAN}{rem_sec // 60} phút ({rem_sec}s){Style.RESET_ALL} nữa sẽ đầy.", Fore.LIGHTBLACK_EX)
 
-            # 3. Nâng cấp dụng cụ đào mỏ qua quảng cáo
-            check_and_upgrade_equipment(headers, tg_id, equip_list)
+            # 3. Nâng cấp DUY NHẤT Xe mỏ (Slot 6) qua quảng cáo
+            check_and_upgrade_minecart(headers, tg_id, equip_list)
 
-            # 4. Tap đào đá liên tục cho đến khi đủ lượt ngày (240/240)
+            # 4. Xem quảng cáo nhận GH/s (45 QC / ngày)
+            check_and_watch_ad_45(headers, tg_id, u, cfg)
+
+            # 5. Đồng bộ Surveys & Timewall & Làm tasks
+            process_surveys_and_tasks(headers, tg_id, user_obj, tasks_list)
+
+            # 6. Tap đào đá liên tục cho đến khi đủ lượt ngày (240/240)
             log("TAP", "Kiểm tra và tap đào đá...", Fore.CYAN)
             err_count = 0
             while True:
@@ -275,7 +401,7 @@ def run_gramstone():
                         break
                     time.sleep(2.5)
 
-            # 5. Chơi Mini Games để tăng tốc độ đào GH/s
+            # 7. Chơi Mini Games để tăng tốc độ đào GH/s
             log("GAMES", "Kiểm tra và chơi Mini Games để buff tốc độ đào...", Fore.CYAN)
             game_list = ["jetpack", "breaker", "catcher", "memory", "match3"]
             for g_name in game_list:
@@ -297,17 +423,24 @@ def run_gramstone():
                 except Exception as e:
                     log("WARN", f"Lỗi chơi game {g_name}: {e}", Fore.YELLOW)
 
-            # 6. Canh thời gian nghỉ cho tới lần CLAIM mỏ tiếp theo (Đúng 1h = 3600s)
+            # 8. Canh thời gian nghỉ cho tới lần CLAIM mỏ tiếp theo (Đúng 1h = 3600s)
             cycle += 1
             wait_time = int(rem_sec) if rem_sec and rem_sec > 30 else 3600
-            wait_time += 15  # Thêm 15 giây dự phòng để chắc chắn hầm mỏ đạt 100% đầy
+            wait_time += 15  # Thêm 15 giây dự phòng
 
             log("SLEEP", f"Hoàn tất việc chu kỳ. Đang canh mỏ đào... Sẽ tự động THU HOẠCH (CLAIM) sau {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa!", Fore.GREEN)
 
+            # Trong lúc chờ 1 tiếng, cứ mỗi 5 phút (300s) kiểm tra xem có thể xem 1 QC nhận GH/s hoặc nâng Xe mỏ hay không!
             while wait_time > 0:
-                step_sleep = min(wait_time, 300) # Cứ mỗi 5 phút in cập nhật tiến độ 1 lần
+                step_sleep = min(wait_time, 300)
                 time.sleep(step_sleep)
                 wait_time -= step_sleep
+
+                # Kiểm tra xen kẽ xem QC 45 lần và nâng Xe mỏ trong lúc chờ
+                if wait_time > 30:
+                    check_and_watch_ad_45(headers, tg_id, u, cfg)
+                    check_and_upgrade_minecart(headers, tg_id, equip_list)
+
                 if wait_time > 0:
                     log("TIMER", f"Đang chờ kho đầy... Còn {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa tới giờ thu hoạch!", Fore.LIGHTBLACK_EX)
 
