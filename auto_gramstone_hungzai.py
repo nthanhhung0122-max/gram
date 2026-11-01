@@ -228,55 +228,84 @@ def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Q
         return False
 
 # =============================================================================
-# 1. NÂNG CẤP DUY NHẤT XE MỎ (SLOT 6: Armored Minecart / Zırhlı Maden Vagonu)
+# 1. TỰ ĐỘNG NÂNG CẤP DỤNG CỤ (EQUIPMENT) THEO THỨ TỰ [6, 1, 2, 5, 3, 4]
 # =============================================================================
-def check_and_upgrade_minecart(init_data, gs_headers, tg_id, user_obj, equip_list):
+EQUIP_NAMES_VN = {
+    1: "Cuốc chim Titanium (Slot 1)",
+    2: "Balo quặng bọc giáp (Slot 2)",
+    3: "Kính ngắm Laser (Slot 3)",
+    4: "Găng tay thủy lực (Slot 4)",
+    5: "Máy khoan lõi quặng (Slot 5)",
+    6: "Xe mỏ bọc thép (Slot 6)"
+}
+
+def check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list):
     """
-    Theo yêu cầu: CHỈ XEM VIDEO ĐỂ NÂNG CẤP XE MỎ (Slot 6).
-    Bỏ qua toàn bộ các slot 1, 2, 3, 4, 5.
+    Tự động xem quảng cáo Adsgram để mở khóa và nâng cấp toàn bộ 6 dụng cụ.
+    Thứ tự ưu tiên theo yêu cầu: [6, 1, 2, 5, 3, 4].
+    Nếu món nào đã MAX (như Xe mỏ Slot 6), tự động chuyển sang món kế tiếp.
     """
     if not equip_list:
         return False
 
-    slot6 = next((eq for eq in equip_list if eq.get("slot") == 6), None)
-    if not slot6:
-        log("MINE_CART", "Không tìm thấy thông tin Xe mỏ (Slot 6).", Fore.YELLOW)
+    # Thứ tự slot ưu tiên nâng cấp: 6 -> 1 -> 2 -> 5 -> 3 -> 4
+    priority_order = [6, 1, 4, 5, 3, 2]
+
+    target_eq = None
+    for slot_num in priority_order:
+        eq = next((x for x in equip_list if x.get("slot") == slot_num), None)
+        if not eq:
+            continue
+        lvl = eq.get("level", 0)
+        max_lvl = eq.get("maxLevel", 5)
+        is_maxed = eq.get("isMaxed", False)
+        if not is_maxed and lvl < max_lvl:
+            target_eq = eq
+            break
+
+    if not target_eq:
+        log("EQUIP", "Toàn bộ 6 dụng cụ đã đạt cấp độ TỐI ĐA (MAX LEVEL)!", Fore.GREEN)
         return False
 
-    lvl = slot6.get("level", 0)
-    max_lvl = slot6.get("maxLevel", 5)
-    is_maxed = slot6.get("isMaxed", False)
-    ads_prog = slot6.get("adsProgress", 0)
-    req_ads = slot6.get("reqAds", 6)
+    slot_id = target_eq.get("slot")
+    eq_name = EQUIP_NAMES_VN.get(slot_id, f"Dụng cụ #{slot_id}")
+    lvl = target_eq.get("level", 0)
+    max_lvl = target_eq.get("maxLevel", 5)
+    ads_prog = target_eq.get("adsProgress", 0)
+    req_ads = target_eq.get("reqAds", 2)
+    is_unlocked = target_eq.get("isUnlocked", False)
+    action_type = "Nâng cấp" if is_unlocked else "Mở khóa"
 
-    log("MINE_CART", f"Xe mỏ (Slot 6): Level {lvl}/{max_lvl} | Đã xem QC: {ads_prog}/{req_ads}", Fore.CYAN)
-
-    if is_maxed or lvl >= max_lvl:
-        log("MINE_CART", f"Xe mỏ đã đạt cấp tối đa (Level {lvl}/{max_lvl})!", Fore.GREEN)
-        return False
+    log("EQUIP", f"{eq_name}: Level {lvl}/{max_lvl} | Đã xem QC: {Fore.YELLOW}{ads_prog}/{req_ads}{Style.RESET_ALL} (Đang tiến hành {action_type})", Fore.CYAN)
 
     if ads_prog < req_ads:
-        log("MINE_CART", f"Bắt đầu xem quảng cáo nâng cấp Xe mỏ ({ads_prog + 1}/{req_ads})...", Fore.YELLOW)
-        ok = perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Xe mỏ")
+        log("EQUIP", f"Bắt đầu xem quảng cáo Adsgram để {action_type} {eq_name} ({ads_prog + 1}/{req_ads})...", Fore.YELLOW)
+        ok = perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name=eq_name)
         if ok:
             try:
                 payload = {
                     "telegram_id": tg_id,
-                    "slot": 6,
+                    "slot": slot_id,
                     "mode": "ad"
                 }
                 r_up = requests.post(f"{API_BASE}/api/equipment/upgrade", headers=gs_headers, json=payload, verify=False, timeout=10).json()
                 if r_up.get("ok"):
                     new_prog = r_up.get("adsProgress", ads_prog + 1)
-                    log("MINE_CART", f"Nâng cấp Xe mỏ thành công! Tiến độ: {Fore.GREEN}{new_prog}/{req_ads}{Style.RESET_ALL} (Level: {r_up.get('newLevel', lvl)})", Fore.GREEN)
-                    # Cập nhật slot6
-                    slot6["adsProgress"] = new_prog
+                    new_lvl = r_up.get("newLevel", lvl)
+                    log("EQUIP", f"{action_type} {eq_name} thành công! Tiến độ: {Fore.GREEN}{new_prog}/{req_ads}{Style.RESET_ALL} (Level: {new_lvl})", Fore.GREEN)
+                    target_eq["adsProgress"] = new_prog
+                    target_eq["level"] = new_lvl
                     return True
                 else:
-                    log("MINE_CART", f"Trạng thái nâng cấp Xe mỏ: {r_up.get('error')}", Fore.LIGHTBLACK_EX)
+                    err_msg = r_up.get("error", "")
+                    log("EQUIP", f"Trạng thái nâng cấp {eq_name}: {err_msg}", Fore.LIGHTBLACK_EX)
             except Exception as e:
-                log("MINE_CART", f"Lỗi gửi yêu cầu nâng cấp: {e}", Fore.LIGHTBLACK_EX)
+                log("EQUIP", f"Lỗi gửi yêu cầu nâng cấp {eq_name}: {e}", Fore.LIGHTBLACK_EX)
     return False
+
+def check_and_upgrade_minecart(init_data, gs_headers, tg_id, user_obj, equip_list):
+    """Hàm tương thích ngược gọi check_and_upgrade_equipment"""
+    return check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list)
 
 # =============================================================================
 # 2. XEM QUẢNG CÁO HÀNG NGÀY (45 QC / NGÀY - TĂNG +0.5 GH/s + AD LADDER)
@@ -501,14 +530,12 @@ def run_gramstone():
                 mined = m.get("pendingMinedTon", 0)
                 log("CLAIM", f"Hầm mỏ đang tích lũy: {Fore.YELLOW}{pct:.1f}%{Style.RESET_ALL} (+{mined:.8f} GRAM) - Còn {Fore.CYAN}{rem_sec // 60} phút ({rem_sec}s){Style.RESET_ALL} nữa sẽ đầy.", Fore.LIGHTBLACK_EX)
 
-            # 3. Nâng cấp DUY NHẤT Xe mỏ (Slot 6) qua quảng cáo Adsgram
-            # Nếu chưa nâng được Xe mỏ thì ưu tiên xem QC nhận 0.5 GH/s (45 cái/ngày)
-            upgraded = check_and_upgrade_minecart(init_data, gs_headers, tg_id, user_obj, equip_list)
+            # 3. Tự động nâng cấp Dụng cụ theo thứ tự [6, 1, 2, 5, 3, 4] qua quảng cáo Adsgram
+            upgraded = check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list)
             if not upgraded:
                 check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, u, cfg)
 
-            # 4. Đồng bộ Surveys & Timewall & Làm tasks
-            process_surveys_and_tasks(gs_headers, tg_id, user_obj, tasks_list)
+        
 
             # 5. Tap đào đá liên tục cho đến khi đủ lượt ngày (240/240)
             log("TAP", "Kiểm tra và tap đào đá...", Fore.CYAN)
@@ -572,9 +599,9 @@ def run_gramstone():
                 time.sleep(step_sleep)
                 wait_time -= step_sleep
 
-                # Kiểm tra xem QC Adsgram xen kẽ trong lúc chờ kho đầy
+                # Kiểm tra xem QC Adsgram xen kẽ trong lúc chờ kho đầy (ưu tiên nâng dụng cụ)
                 if wait_time > 30:
-                    upgraded_wait = check_and_upgrade_minecart(init_data, gs_headers, tg_id, user_obj, equip_list)
+                    upgraded_wait = check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list)
                     if not upgraded_wait:
                         check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, u, cfg)
 
