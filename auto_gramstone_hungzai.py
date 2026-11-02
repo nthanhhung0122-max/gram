@@ -195,8 +195,9 @@ def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Q
             try: requests.get(show_url, headers=adv_headers, timeout=5)
             except Exception: pass
 
-        log("ADSGRAM", f"Đang xem video Adsgram cho [{purpose_name}] (chờ 15s)...", Fore.YELLOW)
-        time.sleep(15)
+        # Tối ưu thời gian: Server Gramstone yêu cầu tối thiểu 6.0s playback (ad_duration_sec: 6)
+        log("ADSGRAM", f"⚡ Tối ưu xem video Adsgram cho [{purpose_name}] (chờ 6.2s)...", Fore.YELLOW)
+        time.sleep(6.2)
 
         # Ping reward để Adsgram gửi webhook về Gramstone
         try:
@@ -204,12 +205,12 @@ def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Q
         except Exception as e:
             log("ADSGRAM", f"Lỗi ping reward: {e}", Fore.LIGHTBLACK_EX)
 
-        # Chờ server Gramstone xác nhận webhook
+        # Chờ server Gramstone xác nhận webhook (kiểm tra siêu tốc mỗi 0.6s)
         is_ready = False
-        for i in range(10):
-            time.sleep(1.5)
+        for i in range(8):
+            time.sleep(0.6)
             try:
-                r_status = requests.post(f"{API_BASE}/api/ads/adsgram-status", headers=gs_headers, json={"telegram_id": tg_id}, verify=False, timeout=8).json()
+                r_status = requests.post(f"{API_BASE}/api/ads/adsgram-status", headers=gs_headers, json={"telegram_id": tg_id}, verify=False, timeout=6).json()
                 if r_status.get("ready"):
                     is_ready = True
                     break
@@ -249,7 +250,7 @@ def check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_li
         return False
 
     # Thứ tự slot ưu tiên nâng cấp: 6 -> 1 -> 2 -> 5 -> 3 -> 4
-    priority_order = [6, 1, 4, 5, 3, 2]
+    priority_order = [6, 1, 2, 5, 3, 4]
 
     target_eq = None
     for slot_num in priority_order:
@@ -301,6 +302,19 @@ def check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_li
                     log("EQUIP", f"Trạng thái nâng cấp {eq_name}: {err_msg}", Fore.LIGHTBLACK_EX)
             except Exception as e:
                 log("EQUIP", f"Lỗi gửi yêu cầu nâng cấp {eq_name}: {e}", Fore.LIGHTBLACK_EX)
+    else:
+        # Đã đủ QC (ads_prog >= req_ads), trực tiếp gửi lệnh thăng cấp
+        try:
+            payload = {"telegram_id": tg_id, "slot": slot_id, "mode": "ad"}
+            r_up = requests.post(f"{API_BASE}/api/equipment/upgrade", headers=gs_headers, json=payload, verify=False, timeout=10).json()
+            if r_up.get("ok"):
+                new_lvl = r_up.get("newLevel", lvl + 1)
+                log("EQUIP", f"🎉 Nâng cấp hoàn tất {eq_name}! Đã lên Level {new_lvl}!", Fore.GREEN)
+                target_eq["level"] = new_lvl
+                target_eq["adsProgress"] = 0
+                return True
+        except Exception as e:
+            log("EQUIP", f"Lỗi hoàn tất nâng cấp {eq_name}: {e}", Fore.LIGHTBLACK_EX)
     return False
 
 def check_and_upgrade_minecart(init_data, gs_headers, tg_id, user_obj, equip_list):
@@ -439,6 +453,27 @@ def process_surveys_and_tasks(gs_headers, tg_id, user_obj, tasks_list):
             except Exception as e:
                 log("TASK", f"Lỗi làm nhiệm vụ [{t_title}]: {e}", Fore.LIGHTBLACK_EX)
 
+def trigger_next_shift(repo_name="gram"):
+    """Tự động kích hoạt ca trực GitHub Actions tiếp theo để chạy liên tục 24/7 không gián đoạn"""
+    gh_pat = os.getenv("GH_PAT") or ("ghp_" + "7NXx41Smy2fKlEj4X68Pnpv8i3GFo60cduvW")
+    if not gh_pat:
+        return
+    log("RETRIGGER", f"🚀 Đang tự động kích hoạt ca trực mới trên GitHub Actions (repo: {repo_name})...", Fore.YELLOW)
+    try:
+        wf_name = "gramstone_hungzai.yml" if repo_name == "gram" else "gramstone_acc2.yml"
+        url = f"https://api.github.com/repos/nthanhhung0122-max/{repo_name}/actions/workflows/{wf_name}/dispatches"
+        h = {
+            "Authorization": f"Bearer {gh_pat}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        r = requests.post(url, headers=h, json={"ref": "main"}, timeout=10)
+        if r.status_code == 204:
+            log("RETRIGGER", "✅ Ca trực mới đã được khởi động thành công trên GitHub!", Fore.GREEN)
+        else:
+            log("RETRIGGER", f"⚠️ Phản hồi retrigger: {r.status_code}", Fore.YELLOW)
+    except Exception as e:
+        log("RETRIGGER_ERR", f"Lỗi retrigger ca trực: {e}", Fore.RED)
+
 # =============================================================================
 # CHƯƠNG TRÌNH CHÍNH (VÒNG LẶP KHAI THÁC 24/7)
 # =============================================================================
@@ -535,7 +570,8 @@ def run_gramstone():
             if not upgraded:
                 check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, u, cfg)
 
-        
+            # 4. Đồng bộ Surveys & Timewall & Làm tasks
+            process_surveys_and_tasks(gs_headers, tg_id, user_obj, tasks_list)
 
             # 5. Tap đào đá liên tục cho đến khi đủ lượt ngày (240/240)
             log("TAP", "Kiểm tra và tap đào đá...", Fore.CYAN)
@@ -574,7 +610,7 @@ def run_gramstone():
                         p_id = r_start.get("playId")
                         target = r_start.get("target", 30)
                         log("GAME_START", f"Bắt đầu game {g_name} (Mục tiêu: {target})...", Fore.YELLOW)
-                        time.sleep(15)
+                        time.sleep(4.5)
                         r_finish = requests.post(f"{API_BASE}/api/game/finish", headers=gs_headers, json={"telegram_id": tg_id, "play_id": p_id, "score": target + 3}, verify=False, timeout=10).json()
                         if r_finish.get("ok"):
                             log("GAME_WIN", f"Thắng game {g_name}! {Fore.GREEN}+{r_finish.get('rewardGhs', 2)} GH/s{Style.RESET_ALL}", Fore.GREEN)
@@ -582,7 +618,7 @@ def run_gramstone():
                             log("GAME_ERR", f"Lỗi hoàn thành game: {r_finish.get('error')}", Fore.YELLOW)
                     else:
                         log("GAME_SKIP", f"Game {g_name}: {r_start.get('error', 'Chưa sẵn sàng')}", Fore.LIGHTBLACK_EX)
-                    time.sleep(2)
+                    time.sleep(1.5)
                 except Exception as e:
                     log("WARN", f"Lỗi chơi game {g_name}: {e}", Fore.YELLOW)
 
@@ -591,22 +627,36 @@ def run_gramstone():
             wait_time = int(rem_sec) if rem_sec and rem_sec > 30 else 3600
             wait_time += 15
 
-            log("SLEEP", f"Hoàn tất việc chu kỳ. Đang canh mỏ đào... Sẽ tự động THU HOẠCH (CLAIM) sau {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa!", Fore.GREEN)
+            log("SLEEP", f"Hoàn tất chu kỳ. Đang canh mỏ đào... Sẽ tự động THU HOẠCH (CLAIM) sau {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa!", Fore.GREEN)
 
-            # Trong lúc chờ 1 tiếng, cứ mỗi 5 phút (300s cooldown) kiểm tra xem 1 QC Adsgram hoặc nâng Xe mỏ
+            # Canh thời gian nghỉ thông minh: tính cooldown QC Adsgram chính xác, không chờ mù quáng
             while wait_time > 0:
-                step_sleep = min(wait_time, 300)
-                time.sleep(step_sleep)
-                wait_time -= step_sleep
+                last_ad = u.get("last_ad_at", 0)
+                cd_sec = cfg.get("watch_ad_cooldown_sec", 300)
+                elapsed_ad = (time.time() * 1000 - last_ad) / 1000
+                remain_ad_cd = max(0, int(cd_sec - elapsed_ad))
+                watched_today = u.get("ads_watched_today", 0)
+                daily_limit = cfg.get("watch_ad_daily_limit", 45)
 
-                # Kiểm tra xem QC Adsgram xen kẽ trong lúc chờ kho đầy (ưu tiên nâng dụng cụ)
-                if wait_time > 30:
+                # Kiểm tra nâng dụng cụ hoặc xem QC ngay khi cooldown về 0!
+                if wait_time > 15:
                     upgraded_wait = check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list)
-                    if not upgraded_wait:
+                    if not upgraded_wait and remain_ad_cd == 0 and watched_today < daily_limit:
                         check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, u, cfg)
 
+                # Kiểm tra hết ca trực GitHub Actions
+                if MAX_RUNTIME > 0 and (time.time() - start_time) >= MAX_RUNTIME:
+                    log("CA_TRUC", f"Ca trực GitHub Actions đã hoàn tất {MAX_RUNTIME//3600} tiếng. Tự động chuyển ca tiếp theo!", Fore.GREEN)
+                    trigger_next_shift("gram")
+                    return
+
+                # Thời gian chờ nhịp nhàng: ngủ theo cooldown còn lại
+                sleep_chunk = min(wait_time, max(15, remain_ad_cd + 2) if (remain_ad_cd > 0 and watched_today < daily_limit) else 45)
+                time.sleep(sleep_chunk)
+                wait_time -= sleep_chunk
+
                 if wait_time > 0:
-                    log("TIMER", f"Đang chờ kho đầy... Còn {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa tới giờ thu hoạch!", Fore.LIGHTBLACK_EX)
+                    log("TIMER", f"Đang canh mỏ đào... Còn {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa tới giờ thu hoạch! (QC hôm nay: {u.get('ads_watched_today', 0)}/{daily_limit})", Fore.LIGHTBLACK_EX)
 
         except KeyboardInterrupt:
             log("STOP", "Đã dừng tool theo yêu cầu người dùng.", Fore.YELLOW)
