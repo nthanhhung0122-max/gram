@@ -332,7 +332,7 @@ def check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, user_data, con
     watched_today = user_data.get("ads_watched_today", 0)
     daily_limit = config.get("watch_ad_daily_limit", 45)
     last_ad_at = user_data.get("last_ad_at", 0)
-    cooldown_sec = config.get("watch_ad_cooldown_sec", 300)
+    cooldown_sec = config.get("watch_ad_cooldown_sec", 60)
     reward_ghs = config.get("watch_ad_reward_ghs", 0.5)
 
     if watched_today >= daily_limit:
@@ -632,7 +632,7 @@ def run_gramstone():
             # Canh thời gian nghỉ thông minh: tính cooldown QC Adsgram chính xác, không chờ mù quáng
             while wait_time > 0:
                 last_ad = u.get("last_ad_at", 0)
-                cd_sec = cfg.get("watch_ad_cooldown_sec", 300)
+                cd_sec = cfg.get("watch_ad_cooldown_sec", 60)
                 elapsed_ad = (time.time() * 1000 - last_ad) / 1000
                 remain_ad_cd = max(0, int(cd_sec - elapsed_ad))
                 watched_today = u.get("ads_watched_today", 0)
