@@ -120,9 +120,9 @@ def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Q
     Giả lập đầy đủ quy trình xem quảng cáo Adsgram chuẩn:
     1. Báo /api/ads/start lên server Gramstone
     2. Yêu cầu banner từ https://api.adsgram.ai/adv với data_check_string chuẩn
-    3. Ping tracking render & show
-    4. Giả lập xem video 15 giây
-    5. Ping tracking reward (loại 14) lên Adsgram
+    3. Ping tracking render, show, click
+    4. Giả lập xem video/banner >= 11 giây (Adsgram SDK yêu cầu tối thiểu 10s)
+    5. Ping tracking return (kèm return-time-diff & is-miniapp) và reward lên Adsgram
     6. Chờ server Gramstone xác nhận webhook qua /api/ads/adsgram-status (ready: True)
     """
     try:
@@ -151,7 +151,7 @@ def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Q
             "is_premium": str(user_obj.get("is_premium", False)).lower(),
             "top_domain": "gramstone.46-101-143-24.sslip.io",
             "data_check_string": data_check_string,
-            "sdk_version": "2.5.0",
+            "sdk_version": "2.2.5",
             "tg_id": tg_id,
             "tg_platform": "android",
             "tma_version": "7.0"
@@ -179,36 +179,49 @@ def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Q
 
         banner = banners[0]
         trackings = banner.get("banner", {}).get("trackings", [])
-        render_url = next((t["value"] for t in trackings if t.get("name") == "render"), None)
-        show_url = next((t["value"] for t in trackings if t.get("name") == "show"), None)
-        reward_url = next((t["value"] for t in trackings if t.get("name") == "reward"), None)
+        t_map = {t.get("name"): t.get("value") for t in trackings if t.get("name") and t.get("value")}
 
-        if not reward_url:
+        # Ping render, show, click
+        if "render" in t_map:
+            try: requests.get(t_map["render"], headers=adv_headers, timeout=5)
+            except Exception: pass
+        if "show" in t_map:
+            try: requests.get(t_map["show"], headers=adv_headers, timeout=5)
+            except Exception: pass
+        if "click" in t_map:
+            try: requests.get(t_map["click"], headers=adv_headers, timeout=5)
+            except Exception: pass
+
+        # Playback duration: tối thiểu 11.2s để đảm bảo vượt ngưỡng 10s của Adsgram SDK
+        log("ADSGRAM", f"⚡ Đang phát nội dung QC Adsgram cho [{purpose_name}] (chờ 11s)...", Fore.YELLOW)
+        t_playback_start = time.time()
+        time.sleep(11.2)
+        diff_ms = int((time.time() - t_playback_start) * 1000)
+
+        # Ping return với diff_ms chuẩn
+        if "return" in t_map:
+            try:
+                ret_url = t_map["return"]
+                sep = "&" if "?" in ret_url else "?"
+                ret_full = f"{ret_url}{sep}return-time-diff={diff_ms}&is-miniapp=true"
+                requests.get(ret_full, headers=adv_headers, timeout=5)
+            except Exception:
+                pass
+
+        # Ping reward để Adsgram gửi webhook về Gramstone
+        if "reward" in t_map:
+            try:
+                requests.get(t_map["reward"], headers=adv_headers, timeout=5)
+            except Exception as e:
+                log("ADSGRAM", f"Lỗi ping reward: {e}", Fore.LIGHTBLACK_EX)
+        else:
             log("ADSGRAM", "Không tìm thấy URL xác thực thưởng của Adsgram.", Fore.YELLOW)
             return False
 
-        # Ping render & show
-        if render_url:
-            try: requests.get(render_url, headers=adv_headers, timeout=5)
-            except Exception: pass
-        if show_url:
-            try: requests.get(show_url, headers=adv_headers, timeout=5)
-            except Exception: pass
-
-        # Tối ưu thời gian: Server Gramstone yêu cầu tối thiểu 6.0s playback (ad_duration_sec: 6)
-        log("ADSGRAM", f"⚡ Tối ưu xem video Adsgram cho [{purpose_name}] (chờ 6.2s)...", Fore.YELLOW)
-        time.sleep(6.2)
-
-        # Ping reward để Adsgram gửi webhook về Gramstone
-        try:
-            r_rew = requests.get(reward_url, headers=adv_headers, timeout=5)
-        except Exception as e:
-            log("ADSGRAM", f"Lỗi ping reward: {e}", Fore.LIGHTBLACK_EX)
-
-        # Chờ server Gramstone xác nhận webhook (kiểm tra siêu tốc mỗi 0.6s)
+        # Chờ server Gramstone xác nhận webhook (kiểm tra mỗi 1.5s tối đa 8 lần = 12s, chuẩn theo waitForAdsgramConfirmation)
         is_ready = False
         for i in range(8):
-            time.sleep(0.6)
+            time.sleep(1.5)
             try:
                 r_status = requests.post(f"{API_BASE}/api/ads/adsgram-status", headers=gs_headers, json={"telegram_id": tg_id}, verify=False, timeout=6).json()
                 if r_status.get("ready"):
@@ -221,7 +234,7 @@ def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Q
             log("ADSGRAM", f"Máy chủ Gramstone đã xác nhận QC thành công!", Fore.GREEN)
             return True
         else:
-            log("ADSGRAM", f"Máy chủ chưa nhận được webhook Adsgram kịp thời.", Fore.LIGHTBLACK_EX)
+            log("ADSGRAM", f"Máy chủ chưa nhận được webhook xác nhận từ Adsgram (sẽ thử lại ở chu kỳ tiếp theo).", Fore.LIGHTBLACK_EX)
             return False
 
     except Exception as e:
@@ -240,14 +253,20 @@ EQUIP_NAMES_VN = {
     6: "Xe mỏ bọc thép (Slot 6)"
 }
 
-def check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list):
+def check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list, user_data, config):
     """
-    Tự động xem quảng cáo Adsgram để mở khóa và nâng cấp toàn bộ 6 dụng cụ.
+    Tự động xem quảng cáo Adsgram để mở khóa và nâng cấp dụng cụ.
     Thứ tự ưu tiên theo yêu cầu: [6, 1, 2, 5, 3, 4].
-    Nếu món nào đã MAX (như Xe mỏ Slot 6), tự động chuyển sang món kế tiếp.
+    Kiểm tra cooldown 60s và giới hạn 45 QC/ngày để tránh spam lỗi.
     """
     if not equip_list:
         return False
+
+    watched_today = user_data.get("ads_watched_today", 0)
+    daily_limit = config.get("watch_ad_daily_limit", 45)
+    last_ad_at = user_data.get("last_ad_at", 0)
+    cooldown_sec = config.get("watch_ad_cooldown_sec", 60)
+    elapsed = (time.time() * 1000 - last_ad_at) / 1000
 
     # Thứ tự slot ưu tiên nâng cấp: 6 -> 1 -> 2 -> 5 -> 3 -> 4
     priority_order = [6, 1, 2, 5, 3, 4]
@@ -265,7 +284,7 @@ def check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_li
             break
 
     if not target_eq:
-        log("EQUIP", "Toàn bộ 6 dụng cụ đã đạt cấp độ TỐI ĐA (MAX LEVEL)!", Fore.GREEN)
+        log("EQUIP", "Toàn bộ dụng cụ đã đạt cấp độ TỐI ĐA (MAX LEVEL)!", Fore.GREEN)
         return False
 
     slot_id = target_eq.get("slot")
@@ -277,33 +296,8 @@ def check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_li
     is_unlocked = target_eq.get("isUnlocked", False)
     action_type = "Nâng cấp" if is_unlocked else "Mở khóa"
 
-    log("EQUIP", f"{eq_name}: Level {lvl}/{max_lvl} | Đã xem QC: {Fore.YELLOW}{ads_prog}/{req_ads}{Style.RESET_ALL} (Đang tiến hành {action_type})", Fore.CYAN)
-
-    if ads_prog < req_ads:
-        log("EQUIP", f"Bắt đầu xem quảng cáo Adsgram để {action_type} {eq_name} ({ads_prog + 1}/{req_ads})...", Fore.YELLOW)
-        ok = perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name=eq_name)
-        if ok:
-            try:
-                payload = {
-                    "telegram_id": tg_id,
-                    "slot": slot_id,
-                    "mode": "ad"
-                }
-                r_up = requests.post(f"{API_BASE}/api/equipment/upgrade", headers=gs_headers, json=payload, verify=False, timeout=10).json()
-                if r_up.get("ok"):
-                    new_prog = r_up.get("adsProgress", ads_prog + 1)
-                    new_lvl = r_up.get("newLevel", lvl)
-                    log("EQUIP", f"{action_type} {eq_name} thành công! Tiến độ: {Fore.GREEN}{new_prog}/{req_ads}{Style.RESET_ALL} (Level: {new_lvl})", Fore.GREEN)
-                    target_eq["adsProgress"] = new_prog
-                    target_eq["level"] = new_lvl
-                    return True
-                else:
-                    err_msg = r_up.get("error", "")
-                    log("EQUIP", f"Trạng thái nâng cấp {eq_name}: {err_msg}", Fore.LIGHTBLACK_EX)
-            except Exception as e:
-                log("EQUIP", f"Lỗi gửi yêu cầu nâng cấp {eq_name}: {e}", Fore.LIGHTBLACK_EX)
-    else:
-        # Đã đủ QC (ads_prog >= req_ads), trực tiếp gửi lệnh thăng cấp
+    # Trường hợp 1: Đã đủ lượt xem QC (ads_prog >= req_ads) -> trực tiếp thăng cấp không cần xem thêm QC
+    if ads_prog >= req_ads:
         try:
             payload = {"telegram_id": tg_id, "slot": slot_id, "mode": "ad"}
             r_up = requests.post(f"{API_BASE}/api/equipment/upgrade", headers=gs_headers, json=payload, verify=False, timeout=10).json()
@@ -313,20 +307,60 @@ def check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_li
                 target_eq["level"] = new_lvl
                 target_eq["adsProgress"] = 0
                 return True
+            else:
+                err_msg = r_up.get("error", "")
+                log("EQUIP", f"Trạng thái nâng cấp {eq_name}: {err_msg}", Fore.LIGHTBLACK_EX)
         except Exception as e:
             log("EQUIP", f"Lỗi hoàn tất nâng cấp {eq_name}: {e}", Fore.LIGHTBLACK_EX)
+        return False
+
+    # Trường hợp 2: Cần xem QC (ads_prog < req_ads)
+    # Kiểm tra giới hạn 45 QC/ngày
+    if watched_today >= daily_limit:
+        log("EQUIP", f"{eq_name}: Đã đạt giới hạn quảng cáo hôm nay ({watched_today}/{daily_limit}), tạm dừng nâng cấp dụng cụ.", Fore.LIGHTBLACK_EX)
+        return False
+
+    # Kiểm tra thời gian hồi chiêu (cooldown 60s)
+    if elapsed < cooldown_sec:
+        remain_wait = int(cooldown_sec - elapsed)
+        log("EQUIP", f"{eq_name}: Đang trong thời gian hồi chiêu QC (còn {remain_wait}s)...", Fore.LIGHTBLACK_EX)
+        return False
+
+    log("EQUIP", f"{eq_name}: Level {lvl}/{max_lvl} | Đã xem QC: {Fore.YELLOW}{ads_prog}/{req_ads}{Style.RESET_ALL} (Đang tiến hành {action_type})", Fore.CYAN)
+    log("EQUIP", f"Bắt đầu xem quảng cáo Adsgram để {action_type} {eq_name} ({ads_prog + 1}/{req_ads})...", Fore.YELLOW)
+    
+    ok = perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name=eq_name)
+    user_data["last_ad_at"] = time.time() * 1000  # Luôn cập nhật thời gian vừa xem để kích hoạt cooldown
+
+    if ok:
+        try:
+            payload = {"telegram_id": tg_id, "slot": slot_id, "mode": "ad"}
+            r_up = requests.post(f"{API_BASE}/api/equipment/upgrade", headers=gs_headers, json=payload, verify=False, timeout=10).json()
+            if r_up.get("ok"):
+                new_prog = r_up.get("adsProgress", ads_prog + 1)
+                new_lvl = r_up.get("newLevel", lvl)
+                user_data["ads_watched_today"] = watched_today + 1
+                log("EQUIP", f"{action_type} {eq_name} thành công! Tiến độ: {Fore.GREEN}{new_prog}/{req_ads}{Style.RESET_ALL} (Level: {new_lvl})", Fore.GREEN)
+                target_eq["adsProgress"] = new_prog
+                target_eq["level"] = new_lvl
+                return True
+            else:
+                err_msg = r_up.get("error", "")
+                log("EQUIP", f"Trạng thái nâng cấp {eq_name}: {err_msg}", Fore.LIGHTBLACK_EX)
+        except Exception as e:
+            log("EQUIP", f"Lỗi gửi yêu cầu nâng cấp {eq_name}: {e}", Fore.LIGHTBLACK_EX)
     return False
 
-def check_and_upgrade_minecart(init_data, gs_headers, tg_id, user_obj, equip_list):
+def check_and_upgrade_minecart(init_data, gs_headers, tg_id, user_obj, equip_list, user_data, config):
     """Hàm tương thích ngược gọi check_and_upgrade_equipment"""
-    return check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list)
+    return check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list, user_data, config)
 
 # =============================================================================
 # 2. XEM QUẢNG CÁO HÀNG NGÀY (45 QC / NGÀY - TĂNG +0.5 GH/s + AD LADDER)
 # =============================================================================
 def check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, user_data, config):
     """
-    Xem quảng cáo nhận +0.5 GH/s (Giới hạn tối đa 45 cái/ngày, cooldown 300s = 5 phút).
+    Xem quảng cáo nhận +0.5 GH/s (Giới hạn tối đa 45 cái/ngày, cooldown 60s).
     Đồng thời nhận thưởng Ad Ladder ở các mốc 5, 10, 20, 30, 45 QC.
     """
     watched_today = user_data.get("ads_watched_today", 0)
@@ -347,6 +381,8 @@ def check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, user_data, con
 
     log("WATCH_AD", f"Bắt đầu xem quảng cáo #{watched_today + 1}/{daily_limit} để nhận +{reward_ghs} GH/s...", Fore.YELLOW)
     ok = perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name=f"QC #{watched_today + 1}")
+    user_data["last_ad_at"] = time.time() * 1000  # Luôn cập nhật thời gian vừa xem để kích hoạt cooldown
+
     if ok:
         try:
             payload = {
@@ -356,7 +392,6 @@ def check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, user_data, con
             if r_ad.get("ok"):
                 new_ghs = r_ad.get("rewardGhs", reward_ghs)
                 user_data["ads_watched_today"] = watched_today + 1
-                user_data["last_ad_at"] = time.time() * 1000
                 log("WATCH_AD", f"Xem QC #{watched_today + 1}/{daily_limit} thành công! {Fore.GREEN}+{new_ghs} GH/s{Style.RESET_ALL}", Fore.GREEN)
                 return True
             else:
@@ -565,10 +600,22 @@ def run_gramstone():
                 mined = m.get("pendingMinedTon", 0)
                 log("CLAIM", f"Hầm mỏ đang tích lũy: {Fore.YELLOW}{pct:.1f}%{Style.RESET_ALL} (+{mined:.8f} GRAM) - Còn {Fore.CYAN}{rem_sec // 60} phút ({rem_sec}s){Style.RESET_ALL} nữa sẽ đầy.", Fore.LIGHTBLACK_EX)
 
-            # 3. Tự động nâng cấp Dụng cụ theo thứ tự [6, 1, 2, 5, 3, 4] qua quảng cáo Adsgram
-            upgraded = check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list)
-            if not upgraded:
-                check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, u, cfg)
+            # 3. Tự động kiểm tra và nâng cấp Dụng cụ hoặc xem QC (Chỉ khi cooldown == 0 và chưa hết quota)
+            last_ad = u.get("last_ad_at", 0)
+            cd_sec = cfg.get("watch_ad_cooldown_sec", 60)
+            elapsed_ad = (time.time() * 1000 - last_ad) / 1000
+            remain_ad_cd = max(0, int(cd_sec - elapsed_ad))
+            watched_today = u.get("ads_watched_today", 0)
+            daily_limit = cfg.get("watch_ad_daily_limit", 45)
+
+            if remain_ad_cd == 0 and watched_today < daily_limit:
+                upgraded = check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list, u, cfg)
+                if not upgraded:
+                    check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, u, cfg)
+            elif watched_today >= daily_limit:
+                log("ADS", f"Đã hoàn thành toàn bộ chỉ tiêu {watched_today}/{daily_limit} quảng cáo hôm nay!", Fore.GREEN)
+            else:
+                log("ADS", f"Đang trong thời gian hồi chiêu QC (còn {remain_ad_cd}s nữa). Sẽ xem tiếp trong chu kỳ chờ.", Fore.LIGHTBLACK_EX)
 
             # 4. Đồng bộ Surveys & Timewall & Làm tasks
             process_surveys_and_tasks(gs_headers, tg_id, user_obj, tasks_list)
@@ -629,7 +676,7 @@ def run_gramstone():
 
             log("SLEEP", f"Hoàn tất chu kỳ. Đang canh mỏ đào... Sẽ tự động THU HOẠCH (CLAIM) sau {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa!", Fore.GREEN)
 
-            # Canh thời gian nghỉ thông minh: tính cooldown QC Adsgram chính xác, không chờ mù quáng
+            # Canh thời gian nghỉ thông minh: tính cooldown QC Adsgram chính xác, không spam vô ích
             while wait_time > 0:
                 last_ad = u.get("last_ad_at", 0)
                 cd_sec = cfg.get("watch_ad_cooldown_sec", 60)
@@ -638,11 +685,17 @@ def run_gramstone():
                 watched_today = u.get("ads_watched_today", 0)
                 daily_limit = cfg.get("watch_ad_daily_limit", 45)
 
-                # Kiểm tra nâng dụng cụ hoặc xem QC ngay khi cooldown về 0!
-                if wait_time > 15:
-                    upgraded_wait = check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list)
-                    if not upgraded_wait and remain_ad_cd == 0 and watched_today < daily_limit:
+                # Chỉ kiểm tra nâng dụng cụ hoặc xem QC ngay khi cooldown về 0 VÀ chưa hết giới hạn ngày
+                if wait_time > 15 and remain_ad_cd == 0 and watched_today < daily_limit:
+                    upgraded_wait = check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list, u, cfg)
+                    if not upgraded_wait:
                         check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, u, cfg)
+                    
+                    # Cập nhật lại cooldown sau khi xem
+                    last_ad = u.get("last_ad_at", 0)
+                    elapsed_ad = (time.time() * 1000 - last_ad) / 1000
+                    remain_ad_cd = max(0, int(cd_sec - elapsed_ad))
+                    watched_today = u.get("ads_watched_today", 0)
 
                 # Kiểm tra hết ca trực GitHub Actions
                 if MAX_RUNTIME > 0 and (time.time() - start_time) >= MAX_RUNTIME:
@@ -650,8 +703,14 @@ def run_gramstone():
                     trigger_next_shift("gram")
                     return
 
-                # Thời gian chờ nhịp nhàng: ngủ theo cooldown còn lại
-                sleep_chunk = min(wait_time, max(15, remain_ad_cd + 2) if (remain_ad_cd > 0 and watched_today < daily_limit) else 45)
+                # Thời gian chờ nhịp nhàng:
+                # Nếu còn lượt QC và đang dính cooldown: ngủ chính xác hết thời gian hồi chiêu (+ 2s an toàn)
+                # Nếu đã hết lượt QC hôm nay hoặc không có QC: ngủ từng đoạn 60s
+                if watched_today < daily_limit and remain_ad_cd > 0:
+                    sleep_chunk = min(wait_time, max(10, remain_ad_cd + 2))
+                else:
+                    sleep_chunk = min(wait_time, 60)
+
                 time.sleep(sleep_chunk)
                 wait_time -= sleep_chunk
 
