@@ -115,6 +115,9 @@ def build_headers_and_body(init_data):
 # =============================================================================
 # HỆ THỐNG XEM QUẢNG CÁO ADSGRAM CHUẨN NATIVE (VƯỢT SERVER VERIFICATION)
 # =============================================================================
+LAST_ADSGRAM_FAIL_TIME = 0
+ADSGRAM_BACKOFF_SECONDS = 1800  # Tự động hoãn 30 phút nếu máy chủ yêu cầu Webhook thực tế
+
 def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="QC"):
     """
     Giả lập đầy đủ quy trình xem quảng cáo Adsgram chuẩn:
@@ -125,6 +128,11 @@ def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Q
     5. Ping tracking return (kèm return-time-diff & is-miniapp) và reward lên Adsgram
     6. Chờ server Gramstone xác nhận webhook qua /api/ads/adsgram-status (ready: True)
     """
+    global LAST_ADSGRAM_FAIL_TIME
+    if time.time() - LAST_ADSGRAM_FAIL_TIME < ADSGRAM_BACKOFF_SECONDS:
+        rem_m = int((ADSGRAM_BACKOFF_SECONDS - (time.time() - LAST_ADSGRAM_FAIL_TIME)) // 60)
+        log("ADSGRAM", f"Tạm hoãn xem QC tự động (còn {rem_m} phút). Server yêu cầu xác thực Webhook từ Telegram app.", Fore.LIGHTBLACK_EX)
+        return False
     try:
         # 1. Báo server Gramstone bắt đầu xem
         requests.post(f"{API_BASE}/api/ads/start", headers=gs_headers, json={"telegram_id": tg_id}, verify=False, timeout=8)
@@ -234,7 +242,8 @@ def perform_adsgram_view(init_data, gs_headers, tg_id, user_obj, purpose_name="Q
             log("ADSGRAM", f"Máy chủ Gramstone đã xác nhận QC thành công!", Fore.GREEN)
             return True
         else:
-            log("ADSGRAM", f"Máy chủ chưa nhận được webhook xác nhận từ Adsgram (sẽ thử lại ở chu kỳ tiếp theo).", Fore.LIGHTBLACK_EX)
+            LAST_ADSGRAM_FAIL_TIME = time.time()
+            log("ADSGRAM", f"Máy chủ chưa nhận được webhook từ Adsgram (server bật bảo mật xác thực). Tạm hoãn xem QC 30 phút để không spam.", Fore.YELLOW)
             return False
 
     except Exception as e:
@@ -674,48 +683,22 @@ def run_gramstone():
             wait_time = int(rem_sec) if rem_sec and rem_sec > 30 else 3600
             wait_time += 15
 
-            log("SLEEP", f"Hoàn tất chu kỳ. Đang canh mỏ đào... Sẽ tự động THU HOẠCH (CLAIM) sau {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa!", Fore.GREEN)
+            log("SLEEP", f"Hoàn tất chu kỳ #{cycle}. Đang canh mỏ đào... Sẽ tự động THU HOẠCH (CLAIM) sau {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa!", Fore.GREEN)
 
-            # Canh thời gian nghỉ thông minh: tính cooldown QC Adsgram chính xác, không spam vô ích
+            # Canh thời gian nghỉ: cập nhật tiến độ đều đặn, không spam vô ích
             while wait_time > 0:
-                last_ad = u.get("last_ad_at", 0)
-                cd_sec = cfg.get("watch_ad_cooldown_sec", 60)
-                elapsed_ad = (time.time() * 1000 - last_ad) / 1000
-                remain_ad_cd = max(0, int(cd_sec - elapsed_ad))
-                watched_today = u.get("ads_watched_today", 0)
-                daily_limit = cfg.get("watch_ad_daily_limit", 45)
-
-                # Chỉ kiểm tra nâng dụng cụ hoặc xem QC ngay khi cooldown về 0 VÀ chưa hết giới hạn ngày
-                if wait_time > 15 and remain_ad_cd == 0 and watched_today < daily_limit:
-                    upgraded_wait = check_and_upgrade_equipment(init_data, gs_headers, tg_id, user_obj, equip_list, u, cfg)
-                    if not upgraded_wait:
-                        check_and_watch_ad_45(init_data, gs_headers, tg_id, user_obj, u, cfg)
-                    
-                    # Cập nhật lại cooldown sau khi xem
-                    last_ad = u.get("last_ad_at", 0)
-                    elapsed_ad = (time.time() * 1000 - last_ad) / 1000
-                    remain_ad_cd = max(0, int(cd_sec - elapsed_ad))
-                    watched_today = u.get("ads_watched_today", 0)
-
                 # Kiểm tra hết ca trực GitHub Actions
                 if MAX_RUNTIME > 0 and (time.time() - start_time) >= MAX_RUNTIME:
                     log("CA_TRUC", f"Ca trực GitHub Actions đã hoàn tất {MAX_RUNTIME//3600} tiếng. Tự động chuyển ca tiếp theo!", Fore.GREEN)
                     trigger_next_shift("gram")
                     return
 
-                # Thời gian chờ nhịp nhàng:
-                # Nếu còn lượt QC và đang dính cooldown: ngủ chính xác hết thời gian hồi chiêu (+ 2s an toàn)
-                # Nếu đã hết lượt QC hôm nay hoặc không có QC: ngủ từng đoạn 60s
-                if watched_today < daily_limit and remain_ad_cd > 0:
-                    sleep_chunk = min(wait_time, max(10, remain_ad_cd + 2))
-                else:
-                    sleep_chunk = min(wait_time, 60)
-
+                sleep_chunk = min(wait_time, 120)  # Cập nhật mỗi 2 phút
                 time.sleep(sleep_chunk)
                 wait_time -= sleep_chunk
 
                 if wait_time > 0:
-                    log("TIMER", f"Đang canh mỏ đào... Còn {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa tới giờ thu hoạch! (QC hôm nay: {u.get('ads_watched_today', 0)}/{daily_limit})", Fore.LIGHTBLACK_EX)
+                    log("TIMER", f"Đang canh mỏ đào... Còn {Fore.CYAN}{wait_time // 60} phút ({wait_time}s){Style.RESET_ALL} nữa tới giờ thu hoạch! (Số dư: {u.get('balance', 0):.8f} TON/GRAM)", Fore.LIGHTBLACK_EX)
 
         except KeyboardInterrupt:
             log("STOP", "Đã dừng tool theo yêu cầu người dùng.", Fore.YELLOW)
