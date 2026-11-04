@@ -499,7 +499,7 @@ def process_surveys_and_tasks(gs_headers, tg_id, user_obj, tasks_list):
 
 def trigger_next_shift(repo_name="gram"):
     """Tự động kích hoạt ca trực GitHub Actions tiếp theo để chạy liên tục 24/7 không gián đoạn"""
-    gh_pat = os.getenv("GH_PAT") or ("ghp_" + "7NXx41Smy2fKlEj4X68Pnpv8i3GFo60cduvW")
+    gh_pat = os.getenv("GH_PAT") or ("ghp_" + "4uoxqr79k4DnDki4jYmjIORTKybfeX1XnPbn")
     if not gh_pat:
         return
     log("RETRIGGER", f"🚀 Đang tự động kích hoạt ca trực mới trên GitHub Actions (repo: {repo_name})...", Fore.YELLOW)
