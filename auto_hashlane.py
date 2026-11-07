@@ -52,6 +52,12 @@ API_HASH = os.getenv("TELEGRAM_API_HASH", "").strip() or "4f9371f95000578c84dbc6
 DEFAULT_SESSION_ACC1 = (
     "1BVtsOHIBuxmpWiBJ9hvwV9pSrzWw5U2I5Fe20Ww8l1LCk9rnsG6T6lLZEJXZE1JJC_qUH_yyWHnRoedRNI5lJYnfjRN4gyGeDrCxquDU12ZflrpCz0VLhMZx2C0LlyUCy2eHRSRE1wUCpEYZaymL0P7Z9eAHwMy4Oogewh5TqyO4x4MF6j0yTq8Zvfpv43O4aQDzErNv3GRqpx8DXBcOJIMP9yVhq-Mby5VH5J9cF-h-bJ5ws3xKjA4GY7YKjHxDt9OI-Zr7mr-V3qZy99UxJooThJj51f2RqOKhODdLh9XZQ0ygSoAd3iFAZDOPMEo8Ch5TrrzLXi2Q3N0HorIL1JfV0xoFQlY="
 )
+DEFAULT_SESSION_ACC2 = (
+    "1BVtsOHIBuzoeRtBOmpNGh2sdyxpZ5e0nY4MrFe-6KKbmJPaM0YnCJiKRI0L9mEh1C5rwqLQqucj456LRF7vV1YIPjZNqL6JevLM0Ww3FTml1NoKdwsiPINfsy9MbBlBhKOvha7py44L4pK5aEXjwpjpoNj4LaSmtWaPiQPufJuTwPB86f4gYjSeXM3HtxhnFU7MtHR5vbZPBa9N2HQSlt2BMB47q00DbQVtvYA37R3R-TrtV2MtwixL9ozChADFq38NYcw4eRyRwKrkobVLccvz0_hvqgHXiQbrfcFLLRkRGwGlRCB-Ew4YhLLdnCbG1hjGEfxUrp9MRmF0JvS-u20MfAuvlcgQ="
+)
+DEFAULT_SESSION_ACC3 = (
+    "1BVtsOHIBuxrTG6Dt9a8C_J7D3bm1disV_mQiY_mw7AP5Gp-cEVAlKU1cfvOJiDnU6yi7PInfBRG_wJBQ3uNc-1kOa8fM3ITgUcE7YkaCd77FoBTgIFqw6gMYeRfVJOS1U9S_botQyX5764dx94NBfHHm8HuQKejs0PrdAJQq6WUTDS3mkijWRWIvO4SwXSUrM5yNOFoGIrav8Mbuyl5ZFQaDPg_kwa11NT4kiqov8rVx0virTbGbQudyFeG80kP4zW2CxcuL6TObemIPJgR_2-jb8zVQRQMiI4oN829ZCfHU2JCQY2S2clWwI7onZV8AhYP1LoDBiu32dgQPuk4brS-r1DtkySc="
+)
 STRING_SESSION = (
     os.getenv("TELEGRAM_STRING_SESSION")
     or os.getenv("TELEGRAM_STRING_SESSION_ACC1")
@@ -69,7 +75,7 @@ def log(tag, msg, color=Fore.WHITE):
 class HashLaneBot:
     def __init__(self, string_session=None, session_path=None):
         self.string_session = string_session or STRING_SESSION
-        self.session_path = session_path or SESSION_FILE_PATH
+        self.session_path = session_path
         self.init_data = None
         self.user_id = None
         self.username = None
@@ -95,7 +101,7 @@ class HashLaneBot:
         log("TELEGRAM", "Đang kết nối Telegram để lấy tgWebAppData HashLane...", Fore.CYAN)
         client = None
         try:
-            if os.path.exists(self.session_path):
+            if self.session_path and os.path.exists(self.session_path):
                 client = TelegramClient(self.session_path, API_ID, API_HASH)
             else:
                 client = TelegramClient(StringSession(self.string_session), API_ID, API_HASH)
@@ -519,16 +525,24 @@ async def run_loop_247(bot_instance, interval_mins=15):
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Bot Auto HashLane ($TON) 24/7 PRO")
+    parser.add_argument("--acc", type=int, default=1, choices=[1, 2, 3], help="Tài khoản Telegram (1, 2 hoặc 3)")
     parser.add_argument("--loop", type=int, default=0, help="Số phút lặp lại (0 để chạy 1 lần)")
     args, _ = parser.parse_known_args()
 
-    print(Fore.YELLOW + """
+    session_map = {1: DEFAULT_SESSION_ACC1, 2: DEFAULT_SESSION_ACC2, 3: DEFAULT_SESSION_ACC3}
+    session_str = os.getenv(f"TELEGRAM_STRING_SESSION_ACC{args.acc}") or os.getenv("TELEGRAM_STRING_SESSION") or session_map.get(args.acc, DEFAULT_SESSION_ACC1)
+    
+    session_file = f"C:/Users/Administrator/Downloads/kiemtien_autoplay/telepet_acc{args.acc}.session"
+    if not os.path.exists(session_file):
+        session_file = None
+
+    print(Fore.YELLOW + f"""
 =============================================================================
   BOT AUTO HASHLANE ($TON) 24/7 PRO - CHUẨN X-DEVICE FINGERPRINT & MOONPOOL
-  Tự động Thu Hoạch Nhân Đôi (2X) | Cày Gems Miễn Phí | Gia Hạn Mỏ | Nâng Cấp
+  Acc: {args.acc} | Tự động Thu Hoạch Nhân Đôi (2X) | Cày Gems Miễn Phí | Gia Hạn Mỏ
 =============================================================================
     """ + Style.RESET_ALL)
-    bot = HashLaneBot()
+    bot = HashLaneBot(string_session=session_str, session_path=session_file)
     if args.loop > 0:
         await run_loop_247(bot, interval_mins=args.loop)
     else:
