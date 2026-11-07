@@ -273,16 +273,17 @@ class GramstoneBot:
         r_start = requests.post(f"{API_BASE}/api/cards/start", headers=self.get_headers(), json={"telegram_id": self.user_id, "tier": tier}, timeout=10)
         if r_start.status_code != 200:
             log("CARD_WARN", f"Chưa thể nhận thẻ mới (HTTP {r_start.status_code})", Fore.YELLOW)
-            return False
+            return False, 60
             
         d_start = r_start.json()
         if not d_start.get("ok"):
             code = d_start.get("code")
+            retry_in = d_start.get("retry_in_sec", 60)
             if code == "cooldown":
-                log("CARD_COOLDOWN", f"⏳ Thẻ mỏ đang trong thời gian nghỉ ({d_start.get('retry_in_sec', 60)}s)", Fore.LIGHTBLACK_EX)
+                log("CARD_COOLDOWN", f"⏳ Thẻ mỏ đang trong thời gian nghỉ ({retry_in}s)", Fore.LIGHTBLACK_EX)
             else:
-                log("CARD_WARN", f"Thông báo: {d_start.get('error', code)}", Fore.YELLOW)
-            return False
+                log("CARD_WARN", f"Thông báo: {d_start.get('error', code)} (Thử lại sau {retry_in}s)", Fore.YELLOW)
+            return False, retry_in
 
         ses = d_start.get("session", {})
         ses_id = ses.get("id")
@@ -312,7 +313,7 @@ class GramstoneBot:
             r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
             if r_adv.status_code == 200:
                 reward_url = None
-                for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"\\]+', r_adv.text):
+                for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s]+', r_adv.text):
                     if 'Reward' in u or 'type=Reward' in u:
                         reward_url = u
                         break
@@ -334,7 +335,7 @@ class GramstoneBot:
             if not counted_s1:
                 log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram.", Fore.YELLOW)
                 requests.post(f"{API_BASE}/api/cards/finish", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id}, timeout=10)
-                return False
+                return False, 30
 
             # --- BƯỚC 2: GIGAPUB ---
             log("STEP2_GIGAPUB", "Bước 2/3: Đang xem QC Gigapub (6.5s)...", Fore.YELLOW)
@@ -367,15 +368,14 @@ class GramstoneBot:
                 u = r_fin.get("user", {})
                 self.bonus_ghs = u.get("bonus_ghs", self.bonus_ghs)
                 log("CARD_SUCCESS", f"🎉🎉🎉 ĐÃ NHẬN THÀNH CÔNG THẺ SAFIR TIER 3 (+{c.get('ghs', 4)} GH/s)! Tổng Bonus GH/s: +{self.bonus_ghs}", Fore.GREEN)
-                return True
+                return True, 0
             else:
                 log("CARD_WARN", f"Hoàn tất chuỗi: {r_fin.get('close_reason', 'done')}", Fore.YELLOW)
         except Exception as e:
             log("CARD_ERR", f"Lỗi trong chuỗi QC Moonpool: {e}", Fore.RED)
             try: requests.post(f"{API_BASE}/api/cards/finish", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id}, timeout=10)
             except Exception: pass
-        return False
-
+        return False, 30
     async def run_cycle(self):
         ok = await self.fetch_tg_init_data()
         if not ok:
@@ -415,28 +415,63 @@ def trigger_next_shift(workflow_file="game1_gramstone.yml"):
         log("HANDOVER", f"Lỗi retrigger: {e}", Fore.RED)
     return False
 
-async def run_loop_247(bot_instance, interval_mins=15):
+async def run_loop_247(bot_instance, interval_mins=0):
     raw_rt = os.getenv("MAX_RUNTIME_SECONDS", "17500").strip()
     max_runtime = int(raw_rt) if raw_rt.isdigit() else 17500
     start_time = time.time()
-    cycle = 1
+    card_count = 0
+    last_vault_check = 0
+    last_tap_check = 0
+    
+    log("CONTINUOUS", "🔥 CHẾ ĐỘ CÀY QUẢNG CÁO THẺ MỎ SAFIR TIER 3 LIÊN TỤC 24/7 ĐÃ BẬT!", Fore.GREEN)
+    
+    ok = await bot_instance.fetch_tg_init_data()
+    if not ok:
+        log("INIT_ERR", "Không thể lấy init_data ban đầu.", Fore.RED)
+        return
+
     while True:
-        log("LOOP", f"🌀 === BẮT ĐẦU CHU KỲ #{cycle} (Gramstone) ===", Fore.MAGENTA)
-        try:
-            await bot_instance.run_cycle()
-        except Exception as e:
-            log("CYCLE_ERR", f"Lỗi chu kỳ #{cycle}: {e}", Fore.RED)
-        
-        cycle += 1
         elapsed = time.time() - start_time
         if elapsed >= max_runtime:
             log("HANDOVER", f"⏰ Hoàn thành ca trực ({elapsed/3600:.1f}h). Tự động chuyển giao ca tiếp theo...", Fore.CYAN)
             trigger_next_shift("game1_gramstone.yml")
             break
-        
-        log("LOOP", f"⏳ Nghỉ {interval_mins} phút trước chu kỳ tiếp theo (Đã trực {elapsed//60}m)...", Fore.YELLOW)
-        await asyncio.sleep(interval_mins * 60)
 
+        now = time.time()
+        
+        # 1. Kiểm tra Kho Mỏ Vault & Streak định kỳ mỗi 5 phút
+        if now - last_vault_check >= 300:
+            try:
+                auth_data = bot_instance.authenticate()
+                if auth_data:
+                    bot_instance.check_and_claim_vault(auth_data)
+                    bot_instance.claim_streak()
+                last_vault_check = now
+            except Exception as e:
+                log("VAULT_ERR", f"Lỗi check vault: {e}", Fore.RED)
+
+        # 2. Đào đá Tap định kỳ mỗi 10 phút
+        if now - last_tap_check >= 600:
+            try:
+                bot_instance.tap_mine()
+                last_tap_check = now
+            except Exception as e:
+                log("TAP_ERR", f"Lỗi tap: {e}", Fore.RED)
+
+        # 3. CÀY THẺ SAFIR TIER 3 (+4 GH/s) LIÊN TỤC
+        try:
+            ok, retry_in = bot_instance.boost_moonpool_card_chain(tier=3)
+            if ok:
+                card_count += 1
+                log("CONTINUOUS", f"🎉 [THẺ MỎ #{card_count}] Đã nhận +4 GH/s! Nghỉ 10s trước ca tiếp theo...", Fore.CYAN)
+                await asyncio.sleep(10)
+            else:
+                wait_sec = max(10, retry_in if retry_in > 0 else 30)
+                log("CONTINUOUS", f"⏳ Chờ hồi chiêu Thẻ Mỏ ({wait_sec}s) để cày tiếp...", Fore.LIGHTBLACK_EX)
+                await asyncio.sleep(wait_sec)
+        except Exception as e:
+            log("CARD_ERR", f"Lỗi cày thẻ: {e}", Fore.RED)
+            await asyncio.sleep(15)
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Bot Auto Gramstone ($GRAM/$TON) 24/7")

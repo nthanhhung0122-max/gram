@@ -285,7 +285,7 @@ class RedRigBot:
                 r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
                 if r_adv.status_code == 200:
                     reward_url = None
-                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"\\]+', r_adv.text):
+                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
                         if 'Reward' in u or 'type=Reward' in u:
                             reward_url = u
                             break
@@ -412,6 +412,95 @@ class RedRigBot:
         except Exception:
             pass
 
+    def boost_rack_unlock_chain(self, state):
+        """Xem chuỗi 3 QC để mở khóa thêm Rack máy đào mới"""
+        cfg = state.get("config", {})
+        block_id = cfg.get("networks", {}).get("adsgram", {}).get("block_id") or "58154"
+        ru = state.get("rack_unlock", {})
+        done = ru.get("ads_done", 0)
+        needed = ru.get("ads_needed", 9)
+        
+        log("RACK_UNLOCK", f"🔓 Kích hoạt chuỗi QC mở khóa Giàn Máy Đào Rack mới (Tiến độ: {done}/{needed} ads)...", Fore.CYAN)
+        
+        r_start = requests.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": "new"}, timeout=10)
+        if r_start.status_code != 200:
+            log("RACK_WARN", f"Chưa thể mở khóa rack (HTTP {r_start.status_code})", Fore.YELLOW)
+            return state
+
+        d_start = r_start.json()
+        if not d_start.get("ok"):
+            log("RACK_WARN", f"Thông báo: {d_start.get('error')}", Fore.YELLOW)
+            return state
+
+        ses = d_start.get("session", {})
+        ses_id = ses.get("id")
+        chain = ses.get("chain", ["adsgram", "gigapub", "monetag"])
+        log("RACK_UNLOCK", f"✅ Phiên Unlock Rack #{ses_id} đã mở! Chuỗi {len(chain)} QC: {' -> '.join(chain)}", Fore.GREEN)
+
+        try:
+            # Step 1: Adsgram
+            if "adsgram" in chain:
+                log("STEP1_ADSGRAM", "Bước 1/3: Xem QC Adsgram mở Rack...", Fore.YELLOW)
+                ad_headers = {
+                    'User-Agent': self.ua, 'Origin': API_BASE, 'Referer': f"{API_BASE}/",
+                    'Accept': 'application/json', 'X-Requested-With': 'org.telegram.messenger'
+                }
+                adv_params = {
+                    'blockId': block_id, 'tg_id': self.user_id, 'tg_platform': 'android',
+                    'platform': 'Linux aarch64', 'language': 'vi', 'top_domain': 'sslip.io',
+                    'signature': self.sig, 'data_check_string': self.dcs, 'sdk_version': '2.2.5'
+                }
+                r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
+                if r_adv.status_code == 200:
+                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
+                        if 'Reward' in u or 'type=Reward' in u:
+                            time.sleep(6.5)
+                            requests.get(u, headers=ad_headers, timeout=10)
+                            time.sleep(3)
+                            break
+                for _ in range(6):
+                    r_s1 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "adsgram"}, timeout=10).json()
+                    if r_s1.get("counted"):
+                        log("STEP1_ADSGRAM", "✓ Bước 1 Adsgram thành công!", Fore.GREEN)
+                        break
+                    time.sleep(2)
+
+            # Step 2: Gigapub
+            if "gigapub" in chain:
+                log("STEP2_GIGAPUB", "Bước 2/3: Xem QC Gigapub (6.5s)...", Fore.YELLOW)
+                time.sleep(6.5)
+                for _ in range(5):
+                    r_s2 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "gigapub"}, timeout=10).json()
+                    if r_s2.get("counted"):
+                        log("STEP2_GIGAPUB", "✓ Bước 2 Gigapub thành công!", Fore.GREEN)
+                        break
+                    time.sleep(2)
+
+            # Step 3: Monetag
+            if "monetag" in chain:
+                log("STEP3_MONETAG", "Bước 3/3: Xem QC Monetag (6.5s)...", Fore.YELLOW)
+                time.sleep(6.5)
+                for _ in range(5):
+                    r_s3 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "monetag"}, timeout=10).json()
+                    if r_s3.get("counted"):
+                        log("STEP3_MONETAG", "✓ Bước 3 Monetag thành công!", Fore.GREEN)
+                        break
+                    time.sleep(2)
+
+            # Finish
+            r_fin = requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=10).json()
+            if r_fin.get("ok"):
+                nst = r_fin.get("state", {})
+                nru = nst.get("rack_unlock", {})
+                new_done = nru.get("ads_done", done + 3)
+                log("RACK_SUCCESS", f"🎉 HOÀN THÀNH CHUỖI MỞ RACK! Tiến độ mới: {new_done}/{needed} ads", Fore.GREEN)
+                return nst
+        except Exception as e:
+            log("RACK_ERR", f"Lỗi trong chuỗi mở rack: {e}", Fore.RED)
+            try: requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
+            except Exception: pass
+        return state
+
     async def run_cycle(self):
         ok = await self.fetch_tg_init_data()
         if not ok:
@@ -458,27 +547,62 @@ def trigger_next_shift(workflow_file="game3_redrig.yml"):
         log("HANDOVER", f"Lỗi retrigger: {e}", Fore.RED)
     return False
 
-async def run_loop_247(bot_instance, interval_mins=10):
+async def run_loop_247(bot_instance, interval_mins=0):
     raw_rt = os.getenv("MAX_RUNTIME_SECONDS", "17500").strip()
     max_runtime = int(raw_rt) if raw_rt.isdigit() else 17500
     start_time = time.time()
-    cycle = 1
+    last_vault_check = 0
+    ad_cycle = 0
+    
+    log("CONTINUOUS", "🔥 CHẾ ĐỘ CÀY QC REDRIG (GPU & MỞ RACK) LIÊN TỤC 24/7 ĐÃ BẬT!", Fore.GREEN)
+    
+    ok = await bot_instance.fetch_tg_init_data()
+    if not ok:
+        log("INIT_ERR", "Không thể lấy init_data ban đầu.", Fore.RED)
+        return
+
     while True:
-        log("LOOP", f"🌀 === BẮT ĐẦU CHU KỲ #{cycle} (REDRIG) ===", Fore.MAGENTA)
-        try:
-            await bot_instance.run_cycle()
-        except Exception as e:
-            log("CYCLE_ERR", f"Lỗi chu kỳ #{cycle}: {e}", Fore.RED)
-        
-        cycle += 1
         elapsed = time.time() - start_time
         if elapsed >= max_runtime:
             log("HANDOVER", f"⏰ Hoàn thành ca trực ({elapsed/3600:.1f}h). Tự động chuyển giao ca tiếp theo...", Fore.CYAN)
             trigger_next_shift("game3_redrig.yml")
             break
-        
-        log("LOOP", f"⏳ Nghỉ {interval_mins} phút trước chu kỳ tiếp theo (Đã trực {elapsed//60}m)...", Fore.YELLOW)
-        await asyncio.sleep(interval_mins * 60)
+
+        now = time.time()
+        state = bot_instance.authenticate()
+        if not state:
+            await asyncio.sleep(15)
+            continue
+
+        # 1. Thu hoạch Két Sắt TON & Check Daily Streak định kỳ
+        if now - last_vault_check >= 300:
+            state = bot_instance.check_and_claim_vault(state)
+            bot_instance.check_and_claim_streak(state)
+            last_vault_check = now
+
+        # 2. XÁC ĐỊNH CÀY CARD GPU HAY MỞ KHÓA RACK MỚI
+        racks = state.get("racks", [])
+        # Kiểm tra xem có bất kỳ rack nào còn chỗ cắm card (fit 1, 2, hoặc 3)
+        has_fit = any(any(r.get("fits", {}).values()) for r in racks)
+        ru = state.get("rack_unlock", {})
+        can_new_rack = ru.get("can_new", False)
+
+        ad_cycle += 1
+        if has_fit:
+            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack còn chỗ -> Tiến hành cày Card GPU...", Fore.CYAN)
+            state = bot_instance.boost_moonpool_gpu_chain(state)
+        elif can_new_rack:
+            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack 1 kín 100% -> Tiến hành cày QC mở khóa Rack mới...", Fore.MAGENTA)
+            state = bot_instance.boost_rack_unlock_chain(state)
+        else:
+            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Đang vận hành tối đa công suất.", Fore.GREEN)
+
+        # Kiểm tra Streak sau mỗi ca xem QC
+        bot_instance.check_and_claim_streak(state)
+
+        # 3. NGHỈ COOLDOWN 62 GIÂY THEO QUY ĐỊNH CỦA SERVER RỒI CÀY TIẾP NGAY
+        log("CONTINUOUS", "⏳ Chờ hồi chiêu 62s trước ca cày quảng cáo tiếp theo...", Fore.LIGHTBLACK_EX)
+        await asyncio.sleep(62)
 
 async def main():
     import argparse
