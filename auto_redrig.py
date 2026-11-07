@@ -2,21 +2,24 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================================
-  BOT AUTO REDRIG ($TON) 24/7 - CHUẨN CƠ CHẾ MOONPOOL 100%
+  BOT AUTO REDRIG ($TON) 24/7 - CHUẨN CƠ CHẾ MOONPOOL 100% (BẢN FIX TRIỆT ĐỂ)
   Platform: REDRIG Mini App (https://redrig.159-198-44-230.sslip.io/)
   Telegram Bot: @redrig_bot
   
-  TÍNH NĂNG TỰ ĐỘNG HÓA TOÀN DIỆN & CHUẨN XÁC:
-    1. THU HOẠCH KÉT SẮT VAULT (/api/claim) định kỳ khi sẵn sàng.
-    2. CHUYÊN CÀY CARD GPU (TIER 3 / TIER 2 / TIER 1) theo chuẩn Native Moonpool:
+  TÍNH NĂNG TỰ ĐỘNG HÓA TOÀN DIỆN & TỰ PHỤC HỒI 100%:
+    1. TỰ ĐỘNG LÀM MỚI TG_INIT_DATA: Tự động re-auth sau mỗi 25 phút hoặc khi
+       phiên hết hạn (chống hoàn toàn lỗi chết âm thầm sau 1-2 tiếng).
+    2. THU HOẠCH KÉT SẮT VAULT (/api/claim) định kỳ mỗi khi có TON.
+    3. CHUYÊN CÀY CARD GPU (TIER 3 / TIER 2 / TIER 1) theo chuẩn Native Moonpool:
        - Tự động phát hiện dung lượng giàn Rack và chọn Tier cao nhất vừa slot.
        - Tự động tiếp tục open_session dở dang hoặc chờ cooldown thông minh.
        - Bước 1: Adsgram (Block 58154) với ping Reward URL thực tế.
        - Bước 2: Gigapub (Delay 6.5s) nếu Tier >= 2.
        - Bước 3: Monetag (Delay 6.5s) nếu Tier == 3.
-       - Kết thúc: Đưa Card GPU mới vào giàn máy đào Rack!
-    3. NHẬN THƯỞNG DAILY STREAK (/api/tasks/streak/claim) khi đủ điều kiện.
-    4. KIỂM TRA & DUY TRÌ GIÀN MÁY ĐÀO RACK (/api/rack/start) tối ưu hóa công suất.
+       - Kết thúc: Đưa Card GPU mới vào giàn máy đào Rack (+12⚡ Power)!
+    4. NHẬN THƯỞNG DAILY STREAK (/api/tasks/streak/claim) tự động.
+    5. KIỂM TRA & DUY TRÌ GIÀN MÁY ĐÀO RACK (/api/rack/start) tối đa công suất.
+    6. TỰ ĐỘNG CHUYỂN GIAO CA 24/7 (Handover Chaining) không bao giờ dừng.
 =============================================================================
 """
 
@@ -66,6 +69,7 @@ class RedRigBot:
         self.string_session = string_session or STRING_SESSION
         self.session_path = session_path or SESSION_FILE_PATH
         self.init_data = None
+        self.last_init_time = 0
         self.user_obj = None
         self.user_id = None
         self.username = None
@@ -81,7 +85,7 @@ class RedRigBot:
         )
 
     async def fetch_tg_init_data(self):
-        log("TELEGRAM", "Đang kết nối Telegram để lấy tgWebAppData REDRIG...", Fore.CYAN)
+        log("TELEGRAM", "Đang kết nối Telegram để lấy tgWebAppData REDRIG tươi mới...", Fore.CYAN)
         client = None
         try:
             if os.path.exists(self.session_path):
@@ -105,13 +109,14 @@ class RedRigBot:
 
             frag = res.url.split("#tgWebAppData=")[1].split("&tgWebAppVersion")[0]
             self.init_data = urllib.parse.unquote(frag)
+            self.last_init_time = time.time()
             params = dict(urllib.parse.parse_qsl(self.init_data))
             self.user_obj = json.loads(params.get("user", "{}"))
             self.user_id = str(self.user_obj.get("id"))
             self.username = self.user_obj.get("username", self.user_id)
             self.sig = params.get("signature", "")
 
-            # Tính data_check_string chuẩn
+            # Tính data_check_string chuẩn base64url theo Adsgram SDK 2.2.5
             pairs = []
             for k, v in urllib.parse.parse_qsl(self.init_data):
                 if k not in ['hash', 'signature']:
@@ -138,11 +143,9 @@ class RedRigBot:
             "Referer": f"{API_BASE}/"
         }
 
-    def get_state(self):
-        """Lấy state mới nhất từ máy chủ REDRIG"""
-        return self.authenticate()
-
     def authenticate(self):
+        if not self.init_data:
+            return None
         try:
             r = requests.post(f"{API_BASE}/api/auth", headers=self.get_headers(), json={}, timeout=12)
             if r.status_code == 200:
@@ -154,25 +157,51 @@ class RedRigBot:
                     pw = st.get("power", {})
                     self.power = pw.get("total", 0)
                     self.earn_h = st.get("earn", {}).get("per_hour", "0")
-                    log("AUTH", f"✅ Đăng nhập REDRIG! User: @{u.get('username')} | Số dư: {self.balance} TON | Công suất: {self.power} Power ({float(self.earn_h):.8f} TON/h)", Fore.GREEN)
+                    log("AUTH", f"✅ Đăng nhập REDRIG! User: @{u.get('username')} | Số dư: {self.balance} TON | Công suất: {self.power}⚡ ({float(self.earn_h):.8f} TON/h)", Fore.GREEN)
                     return st
-            log("AUTH_ERR", f"Lỗi xác thực HTTP {r.status_code}", Fore.RED)
+            log("AUTH_ERR", f"Lỗi xác thực HTTP {r.status_code}", Fore.YELLOW)
         except Exception as e:
-            log("AUTH_ERR", f"Ngoại lệ auth: {e}", Fore.RED)
+            log("AUTH_ERR", f"Ngoại lệ auth: {e}", Fore.YELLOW)
         return None
+
+    def get_state(self):
+        """Lấy state mới nhất từ máy chủ REDRIG"""
+        return self.authenticate()
+
+    async def get_valid_state(self):
+        """
+        Đảm bảo LUÔN CÓ state hợp lệ:
+        - Tự động làm mới init_data từ Telegram nếu đã quá 25 phút.
+        - Tự động kết nối lại Telethon nếu server trả về lỗi hết hạn (401 / None).
+        """
+        now = time.time()
+        # Nếu chưa có init_data hoặc đã quá 25 phút -> làm mới ngay
+        if not self.init_data or (now - self.last_init_time > 1500):
+            log("AUTH_REFRESH", "🔄 Phiên tgWebAppData đã quá 25 phút. Đang làm mới từ Telegram...", Fore.CYAN)
+            await self.fetch_tg_init_data()
+
+        st = self.authenticate()
+        if not st:
+            log("AUTH_RETRY", "⚠️ Phiên không hợp lệ hoặc hết hạn. Đang kết nối lại Telethon lấy token mới...", Fore.YELLOW)
+            ok = await self.fetch_tg_init_data()
+            if ok:
+                st = self.authenticate()
+
+        return st
 
     def check_and_claim_vault(self, state):
         v = state.get("vault", {}) if state else {}
         claimable = v.get("claimable", False)
-        pending = v.get("pending", "0")
+        pending = float(v.get("pending", "0") or 0)
         capacity = v.get("capacity", "0")
         progress = float(v.get("progress", 0.0))
         sec_left = v.get("seconds_to_full", 0)
 
-        log("VAULT", f"🔐 Két sắt: {pending}/{capacity} TON ({progress*100:.1f}%) | Đầy sau: ~{sec_left//60}p | Sẵn sàng: {claimable}", Fore.CYAN)
+        log("VAULT", f"🔐 Két sắt: {pending:.8f}/{capacity} TON ({progress*100:.1f}%) | Đầy sau: ~{sec_left//60}p | Sẵn sàng: {claimable}", Fore.CYAN)
 
-        if claimable or progress >= 0.99:
-            log("CLAIM", f"🎉 Két sắt đã sẵn sàng! Tiến hành thu hoạch {pending} TON...", Fore.YELLOW)
+        # Thu hoạch ngay khi có TON (như Moonpool) hoặc khi sẵn sàng
+        if claimable or pending > 0.000001 or progress >= 0.99:
+            log("CLAIM", f"🎉 Két sắt đã sẵn sàng! Tiến hành thu hoạch {pending:.8f} TON...", Fore.YELLOW)
             try:
                 r_c = requests.post(f"{API_BASE}/api/claim", headers=self.get_headers(), json={}, timeout=12)
                 if r_c.status_code == 200:
@@ -216,7 +245,8 @@ class RedRigBot:
                 log("GPU_MOONPOOL", f"Phát hiện ca GPU #{ses_id} (Tier {tier}) đang mở (Đã xong bước {steps_done}/{len(chain)}). Tiếp tục từ bước {start_step}!", Fore.MAGENTA)
             else:
                 log("GPU_MOONPOOL", f"Phiên GPU #{open_ses.get('id')} đã hết hạn. Đang đóng...", Fore.YELLOW)
-                requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
+                try: requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
+                except Exception: pass
                 time.sleep(2)
 
         # 2. Nếu chưa có session, chọn Tier tối ưu theo khe trống của Giàn Rack (Hỗ trợ Auto-Fallback chống 429)
@@ -276,8 +306,11 @@ class RedRigBot:
                     log("GPU_FALLBACK", "🔄 Toàn bộ Card GPU đang giới hạn/hồi chiêu. Tự động chuyển sang cày Mở khóa Rack mới...", Fore.MAGENTA)
                     return self.boost_rack_unlock_chain(state)
                 
-                log("GPU_COOLDOWN", "⏳ Máy chủ REDRIG đang áp dụng hồi chiêu toàn bộ Card GPU. Giãn cách 120s...", Fore.YELLOW)
-                time.sleep(120)
+                # Tính toán thời gian hồi chiêu ngắn nhất
+                min_cd = min([c.get("cooldown_left_sec", 60) for _, c in candidate_tiers if c.get("cooldown_left_sec", 0) > 0] or [60])
+                wait_sec = max(30, min_cd)
+                log("GPU_COOLDOWN", f"⏳ Toàn bộ Card GPU đang hồi chiêu. Tự động chờ {wait_sec}s...", Fore.YELLOW)
+                time.sleep(wait_sec)
                 return state
 
         try:
@@ -387,9 +420,6 @@ class RedRigBot:
         if not st_task:
             return
 
-        prog = st_task.get("progress", {})
-        cur = prog.get("current", 0)
-        tgt = prog.get("target", 5)
         streak_info = st_task.get("streak", {})
         claimed = streak_info.get("claimed_today", False)
         day = streak_info.get("day", 1)
@@ -399,21 +429,15 @@ class RedRigBot:
             log("STREAK", f"✅ Hôm nay đã nhận thưởng Daily Streak (Ngày {day}/{days})!", Fore.GREEN)
             return
 
-        log("STREAK", f"📅 Tiến độ Streak hôm nay: {cur}/{tgt} ads (Ngày {day}/{days})", Fore.CYAN)
-        if cur >= tgt:
-            log("STREAK", f"🎉 Đã đủ điều kiện nhận thưởng Daily Streak! Tiến hành nhận...", Fore.YELLOW)
-            try:
-                r = requests.post(f"{API_BASE}/api/tasks/streak/claim", headers=self.get_headers(), json={}, timeout=10)
-                if r.status_code == 200:
-                    d = r.json()
-                    if d.get("ok"):
-                        gr = d.get("granted", {})
-                        pw = gr.get("power", 6)
-                        log("STREAK", f"🎁 NHẬN THÀNH CÔNG DAILY STREAK: +{pw}⚡ Power!", Fore.GREEN)
-                    elif d.get("already"):
-                        log("STREAK", "✅ Hôm nay đã nhận thưởng Streak rồi.", Fore.GREEN)
-            except Exception as e:
-                log("STREAK_ERR", f"Lỗi nhận thưởng Streak: {e}", Fore.RED)
+        try:
+            r = requests.post(f"{API_BASE}/api/tasks/streak/claim", headers=self.get_headers(), json={}, timeout=10).json()
+            if r.get("ok"):
+                rew = r.get("reward", {})
+                log("STREAK", f"🎉 ĐÃ NHẬN DAILY STREAK NGÀY {day}: +{rew.get('ton')} TON, +{rew.get('power')}⚡ Power!", Fore.GREEN)
+            else:
+                log("STREAK", f"Chưa đủ điều kiện nhận Streak hôm nay: {r.get('error', 'Chưa xong')}", Fore.YELLOW)
+        except Exception as e:
+            log("STREAK_ERR", f"Lỗi nhận Streak: {e}", Fore.RED)
 
     def manage_racks(self, state):
         """Quản lý và hiển thị trạng thái các giàn máy đào Rack"""
@@ -468,34 +492,25 @@ class RedRigBot:
         if not ses_id:
             log("RACK_UNLOCK", f"🔓 Kích hoạt chuỗi QC mở khóa Giàn Máy Đào Rack mới (Tiến độ: {done}/{needed} ads)...", Fore.CYAN)
             r_start = requests.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": "new"}, timeout=10)
-            
-            if r_start.status_code == 429:
-                err_data = {}
-                try: err_data = r_start.json()
-                except Exception: pass
-                log("RACK_COOLDOWN", f"Gặp giới hạn tần suất mở rack (HTTP 429: {err_data.get('code', 'cooldown')}). Chờ 65s...", Fore.YELLOW)
-                time.sleep(65)
+            if r_start.status_code == 200:
+                d = r_start.json()
+                if d.get("ok"):
+                    ses = d.get("session", {})
+                    ses_id = ses.get("id")
+                    chain = ses.get("chain", chain)
+                    start_step = 1
+                    log("RACK_UNLOCK", f"✅ Khởi tạo thành công phiên mở Rack #{ses_id}! Chuỗi QC: {' -> '.join(chain)}", Fore.GREEN)
+                else:
+                    log("RACK_WARN", f"Thông báo từ REDRIG: {d.get('error', 'Chưa sẵn sàng')}", Fore.YELLOW)
+                    return state
+            else:
+                log("RACK_WARN", f"Chưa thể bắt đầu mở Rack (HTTP {r_start.status_code})", Fore.YELLOW)
                 return state
-
-            if r_start.status_code != 200:
-                log("RACK_WARN", f"Chưa thể mở khóa rack (HTTP {r_start.status_code})", Fore.YELLOW)
-                return state
-
-            d_start = r_start.json()
-            if not d_start.get("ok"):
-                log("RACK_WARN", f"Thông báo: {d_start.get('error')}", Fore.YELLOW)
-                return state
-
-            ses = d_start.get("session", {})
-            ses_id = ses.get("id")
-            chain = ses.get("chain", chain)
-            start_step = 1
-            log("RACK_UNLOCK", f"✅ Phiên Unlock Rack #{ses_id} đã mở! Chuỗi {len(chain)} QC: {' -> '.join(chain)}", Fore.GREEN)
 
         try:
             # Step 1: Adsgram
             if "adsgram" in chain and start_step <= 1:
-                log("STEP1_ADSGRAM", "Bước 1/3: Xem QC Adsgram mở Rack...", Fore.YELLOW)
+                log("STEP1_ADSGRAM", f"Bước 1/3: Xem QC Adsgram (Block {block_id})...", Fore.YELLOW)
                 ad_headers = {
                     'User-Agent': self.ua, 'Origin': API_BASE, 'Referer': f"{API_BASE}/",
                     'Accept': 'application/json', 'X-Requested-With': 'org.telegram.messenger'
@@ -562,11 +577,7 @@ class RedRigBot:
         return state
 
     async def run_cycle(self):
-        ok = await self.fetch_tg_init_data()
-        if not ok:
-            return
-        
-        state = self.authenticate()
+        state = await self.get_valid_state()
         if not state:
             return
 
@@ -616,9 +627,9 @@ async def run_loop_247(bot_instance, interval_mins=0):
     
     log("CONTINUOUS", "🔥 CHẾ ĐỘ CÀY QC REDRIG (GPU & MỞ RACK) LIÊN TỤC 24/7 ĐÃ BẬT!", Fore.GREEN)
     
-    ok = await bot_instance.fetch_tg_init_data()
-    if not ok:
-        log("INIT_ERR", "Không thể lấy init_data ban đầu.", Fore.RED)
+    state = await bot_instance.get_valid_state()
+    if not state:
+        log("INIT_ERR", "Không thể lấy state ban đầu.", Fore.RED)
         return
 
     while True:
@@ -629,30 +640,31 @@ async def run_loop_247(bot_instance, interval_mins=0):
             break
 
         now = time.time()
-        state = bot_instance.authenticate()
+        # Đảm bảo luôn lấy state tươi mới, tự động re-auth từ Telethon nếu token hết hạn
+        state = await bot_instance.get_valid_state()
         if not state:
+            log("RETRY", "Chờ 15s trước khi thử lại kết nối...", Fore.YELLOW)
             await asyncio.sleep(15)
             continue
 
-        # 1. Thu hoạch Két Sắt TON & Check Daily Streak định kỳ
-        if now - last_vault_check >= 300:
+        # 1. Thu hoạch Két Sắt TON & Check Daily Streak định kỳ mỗi 3-5 phút
+        if now - last_vault_check >= 180:
             state = bot_instance.check_and_claim_vault(state)
             bot_instance.check_and_claim_streak(state)
             last_vault_check = now
 
         # 2. XÁC ĐỊNH CÀY CARD GPU HAY MỞ KHÓA RACK MỚI
         racks = state.get("racks", [])
-        # Kiểm tra xem có bất kỳ rack nào còn chỗ cắm card (fit 1, 2, hoặc 3)
         has_fit = any(any(r.get("fits", {}).values()) for r in racks)
         ru = state.get("rack_unlock", {})
         can_new_rack = ru.get("can_new", False)
 
         ad_cycle += 1
         if has_fit:
-            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack còn chỗ -> Tiến hành cày Card GPU...", Fore.CYAN)
+            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack còn chỗ -> Tiến hành cày Card GPU (+12⚡)...", Fore.CYAN)
             state = bot_instance.boost_moonpool_gpu_chain(state)
         elif can_new_rack:
-            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack 1 kín 100% -> Tiến hành cày QC mở khóa Rack mới...", Fore.MAGENTA)
+            log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Giàn Rack kín 100% -> Tiến hành cày QC mở khóa Rack mới...", Fore.MAGENTA)
             state = bot_instance.boost_rack_unlock_chain(state)
         else:
             log("CONTINUOUS", f"🚀 [CA #{ad_cycle}] Đang vận hành tối đa công suất.", Fore.GREEN)
@@ -660,13 +672,9 @@ async def run_loop_247(bot_instance, interval_mins=0):
         # Kiểm tra Streak sau mỗi ca xem QC
         bot_instance.check_and_claim_streak(state)
 
-        # 3. NGHỈ COOLDOWN VÀ LÀM MỚI STATE TỪ SERVER TRƯỚC CA TIẾP THEO
+        # 3. NGHỈ COOLDOWN THÔNG MINH TRƯỚC CA TIẾP THEO
         log("CONTINUOUS", "⏳ Chờ hồi chiêu 62s trước ca cày quảng cáo tiếp theo...", Fore.LIGHTBLACK_EX)
         await asyncio.sleep(62)
-        # Làm mới state từ máy chủ REDRIG
-        fresh_state = bot_instance.get_state()
-        if fresh_state:
-            state = fresh_state
 
 async def main():
     import argparse
@@ -676,7 +684,7 @@ async def main():
 
     print(Fore.YELLOW + """
 =============================================================================
-  BOT AUTO REDRIG ($TON) 24/7 - CHUẨN CƠ CHẾ MOONPOOL 100%
+  BOT AUTO REDRIG ($TON) 24/7 - CHUẨN CƠ CHẾ MOONPOOL 100% (BẢN FIX TRIỆT ĐỂ)
   Tự động Thu Hoạch Két Sắt Mỗi Giờ | Cày Card GPU Phù Hợp Giàn Máy Đào
 =============================================================================
     """ + Style.RESET_ALL)

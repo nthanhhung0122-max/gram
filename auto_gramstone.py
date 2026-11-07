@@ -78,6 +78,7 @@ class GramstoneBot:
         self.username = None
         self.sig = ""
         self.dcs = ""
+        self.last_init_time = 0
         self.balance = 0.0
         self.bonus_ghs = 0.0
         self.total_ghs = 0.0
@@ -145,6 +146,7 @@ class GramstoneBot:
             raw = "\n".join(pairs)
             self.dcs = base64.b64encode(raw.encode('utf-8')).decode('ascii').replace('+', '-').replace('/', '_').rstrip('=')
             
+            self.last_init_time = time.time()
             log("TELEGRAM", f"✅ Lấy init_data thành công cho @{self.username} ({self.user_id})", Fore.GREEN)
             return True
         except Exception as e:
@@ -162,6 +164,17 @@ class GramstoneBot:
             "Origin": API_BASE,
             "Referer": f"{API_BASE}/"
         }
+
+    async def get_valid_auth(self):
+        now = time.time()
+        if not self.init_data or (now - self.last_init_time > 1500):
+            await self.fetch_tg_init_data()
+        d = self.authenticate()
+        if not d:
+            ok = await self.fetch_tg_init_data()
+            if ok:
+                d = self.authenticate()
+        return d
 
     def authenticate(self):
         device_info = {
@@ -460,7 +473,7 @@ async def run_loop_247(bot_instance, interval_mins=0):
         # 1. Kiểm tra Kho Mỏ Vault & Streak định kỳ mỗi 5 phút
         if now - last_vault_check >= 300:
             try:
-                auth_data = bot_instance.authenticate()
+                auth_data = await bot_instance.get_valid_auth()
                 if auth_data:
                     bot_instance.check_and_claim_vault(auth_data)
                     bot_instance.claim_streak()
