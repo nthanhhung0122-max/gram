@@ -216,6 +216,41 @@ class RedRigBot:
                 log("CLAIM_ERR", f"Lỗi thu hoạch két sắt: {e}", Fore.RED)
         return state
 
+    def report_step(self, session_id, network, max_tries=14):
+        """Báo cáo hoàn thành bước QC chuẩn frontend redrig_app.js"""
+        started = time.time()
+        for attempt in range(max_tries):
+            try:
+                r = requests.post(
+                    f"{API_BASE}/api/fish/step",
+                    headers=self.get_headers(),
+                    json={"session_id": session_id, "network": network},
+                    timeout=10
+                )
+                d = r.json() if r.status_code in [200, 400, 409, 429, 500] else {}
+                if d.get("ok") and d.get("counted"):
+                    return True, d.get("session")
+                code = d.get("code", "")
+                if code == "too_early":
+                    retry_ms = d.get("data", {}).get("retry_in_ms", 1000)
+                    wait_s = min(6.0, float(retry_ms) / 1000.0) + 0.25
+                    time.sleep(wait_s)
+                    continue
+                if code == "ad_unverified":
+                    if time.time() - started > 15.0:
+                        log("STEP_RETRY", f"[{network}] Adsgram verify timeout (15s)", Fore.YELLOW)
+                        return False, None
+                    time.sleep(1.5)
+                    continue
+                if code in ["rate_limited", "server_error"] and attempt < max_tries - 1:
+                    time.sleep(1.5)
+                    continue
+                log("STEP_DEBUG", f"[{network}] Thử #{attempt+1}: HTTP {r.status_code} code={code} err={d.get('error', '')}", Fore.YELLOW)
+                time.sleep(2.0)
+            except Exception as e:
+                time.sleep(2.0)
+        return False, None
+
     def boost_moonpool_gpu_chain(self, state):
         """
         CƠ CHẾ MOONPOOL CHUẨN XÁC TRÊN REDRIG:
@@ -336,64 +371,59 @@ class RedRigBot:
                     'sdk_version': '2.2.5'
                 }
                 r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
+                render_url, show_url, reward_url = None, None, None
                 if r_adv.status_code == 200:
-                    reward_url = None
                     for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
-                        if 'Reward' in u or 'type=Reward' in u:
+                        if 'trackingtypeid=1' in u or 'type=Render' in u:
+                            render_url = u
+                        elif 'trackingtypeid=2' in u or 'type=Show' in u:
+                            show_url = u
+                        elif 'trackingtypeid=14' in u or 'Reward' in u or 'type=Reward' in u:
                             reward_url = u
-                            break
-                    if reward_url:
-                        log("STEP1_ADSGRAM", "Đang xem video Adsgram (6.5s)...", Fore.YELLOW)
-                        time.sleep(6.5)
-                        requests.get(reward_url, headers=ad_headers, timeout=10)
-                        time.sleep(3)
 
-                counted_s1 = False
-                for _ in range(6):
-                    r_s1 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "adsgram"}, timeout=10).json()
-                    if r_s1.get("counted"):
-                        counted_s1 = True
-                        log("STEP1_ADSGRAM", f"✓ Bước 1/{len(chain)} Adsgram hoàn thành thành công!", Fore.GREEN)
-                        break
-                    time.sleep(2)
+                if render_url:
+                    try: requests.get(render_url, headers=ad_headers, timeout=8)
+                    except Exception: pass
+                if show_url:
+                    try: requests.get(show_url, headers=ad_headers, timeout=8)
+                    except Exception: pass
 
-                if not counted_s1:
-                    log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram.", Fore.YELLOW)
+                log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
+                time.sleep(8.5)
+
+                if reward_url:
+                    try: requests.get(reward_url, headers=ad_headers, timeout=10)
+                    except Exception: pass
+                time.sleep(3.5)
+
+                counted_s1, _ = self.report_step(ses_id, "adsgram", max_tries=14)
+                if counted_s1:
+                    log("STEP1_ADSGRAM", f"✓ Bước 1/{len(chain)} Adsgram hoàn thành thành công!", Fore.GREEN)
+                else:
+                    log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram. Huỷ ca để làm mới...", Fore.YELLOW)
                     requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
                     return state
 
             # --- BƯỚC 2: GIGAPUB (nếu có trong chuỗi) ---
             if "gigapub" in chain and start_step <= 2:
                 step_idx = chain.index("gigapub") + 1
-                log("STEP2_GIGAPUB", f"Bước {step_idx}/{len(chain)}: Đang xem QC Gigapub (6.5s)...", Fore.YELLOW)
-                time.sleep(6.5)
-                counted_s2 = False
-                for _ in range(5):
-                    r_s2 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "gigapub"}, timeout=10).json()
-                    if r_s2.get("counted"):
-                        counted_s2 = True
-                        log("STEP2_GIGAPUB", f"✓ Bước {step_idx}/{len(chain)} Gigapub hoàn thành thành công!", Fore.GREEN)
-                        break
-                    time.sleep(2)
-
-                if not counted_s2:
+                log("STEP2_GIGAPUB", f"Bước {step_idx}/{len(chain)}: Đang xem QC Gigapub (8.5s)...", Fore.YELLOW)
+                time.sleep(8.5)
+                counted_s2, _ = self.report_step(ses_id, "gigapub", max_tries=14)
+                if counted_s2:
+                    log("STEP2_GIGAPUB", f"✓ Bước {step_idx}/{len(chain)} Gigapub hoàn thành thành công!", Fore.GREEN)
+                else:
                     log("STEP2_WARN", "Chưa xác nhận được Bước Gigapub.", Fore.YELLOW)
 
             # --- BƯỚC 3: MONETAG (nếu có trong chuỗi) ---
             if "monetag" in chain and start_step <= 3:
                 step_idx = chain.index("monetag") + 1
-                log("STEP3_MONETAG", f"Bước {step_idx}/{len(chain)}: Đang xem QC Monetag (6.5s)...", Fore.YELLOW)
-                time.sleep(6.5)
-                counted_s3 = False
-                for _ in range(5):
-                    r_s3 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "monetag"}, timeout=10).json()
-                    if r_s3.get("counted"):
-                        counted_s3 = True
-                        log("STEP3_MONETAG", f"✓ Bước {step_idx}/{len(chain)} Monetag hoàn thành thành công!", Fore.GREEN)
-                        break
-                    time.sleep(2)
-
-                if not counted_s3:
+                log("STEP3_MONETAG", f"Bước {step_idx}/{len(chain)}: Đang xem QC Monetag (8.5s)...", Fore.YELLOW)
+                time.sleep(8.5)
+                counted_s3, _ = self.report_step(ses_id, "monetag", max_tries=14)
+                if counted_s3:
+                    log("STEP3_MONETAG", f"✓ Bước {step_idx}/{len(chain)} Monetag hoàn thành thành công!", Fore.GREEN)
+                else:
                     log("STEP3_WARN", "Chưa xác nhận được Bước Monetag.", Fore.YELLOW)
 
             # --- KẾT THÚC VÀ NHẬN CARD GPU VÀO RACK ---
@@ -521,41 +551,50 @@ class RedRigBot:
                     'signature': self.sig, 'data_check_string': self.dcs, 'sdk_version': '2.2.5'
                 }
                 r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
+                render_url, show_url, reward_url = None, None, None
                 if r_adv.status_code == 200:
                     for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
-                        if 'Reward' in u or 'type=Reward' in u:
-                            time.sleep(6.5)
-                            requests.get(u, headers=ad_headers, timeout=10)
-                            time.sleep(3)
-                            break
-                for _ in range(6):
-                    r_s1 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "adsgram"}, timeout=10).json()
-                    if r_s1.get("counted"):
-                        log("STEP1_ADSGRAM", "✓ Bước 1 Adsgram thành công!", Fore.GREEN)
-                        break
-                    time.sleep(2)
+                        if 'trackingtypeid=1' in u or 'type=Render' in u:
+                            render_url = u
+                        elif 'trackingtypeid=2' in u or 'type=Show' in u:
+                            show_url = u
+                        elif 'trackingtypeid=14' in u or 'Reward' in u or 'type=Reward' in u:
+                            reward_url = u
+
+                if render_url:
+                    try: requests.get(render_url, headers=ad_headers, timeout=8)
+                    except Exception: pass
+                if show_url:
+                    try: requests.get(show_url, headers=ad_headers, timeout=8)
+                    except Exception: pass
+
+                log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s)...", Fore.YELLOW)
+                time.sleep(8.5)
+
+                if reward_url:
+                    try: requests.get(reward_url, headers=ad_headers, timeout=10)
+                    except Exception: pass
+                time.sleep(3.5)
+
+                c1, _ = self.report_step(ses_id, "adsgram", max_tries=14)
+                if c1:
+                    log("STEP1_ADSGRAM", "✓ Bước 1 Adsgram thành công!", Fore.GREEN)
 
             # Step 2: Gigapub
             if "gigapub" in chain and start_step <= 2:
-                log("STEP2_GIGAPUB", "Bước 2/3: Xem QC Gigapub (6.5s)...", Fore.YELLOW)
-                time.sleep(6.5)
-                for _ in range(5):
-                    r_s2 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "gigapub"}, timeout=10).json()
-                    if r_s2.get("counted"):
-                        log("STEP2_GIGAPUB", "✓ Bước 2 Gigapub thành công!", Fore.GREEN)
-                        break
-                    time.sleep(2)
+                log("STEP2_GIGAPUB", "Bước 2/3: Xem QC Gigapub (8.5s)...", Fore.YELLOW)
+                time.sleep(8.5)
+                c2, _ = self.report_step(ses_id, "gigapub", max_tries=14)
+                if c2:
+                    log("STEP2_GIGAPUB", "✓ Bước 2 Gigapub thành công!", Fore.GREEN)
 
             # Step 3: Monetag
             if "monetag" in chain and start_step <= 3:
-                log("STEP3_MONETAG", "Bước 3/3: Xem QC Monetag (6.5s)...", Fore.YELLOW)
-                time.sleep(6.5)
-                for _ in range(5):
-                    r_s3 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "monetag"}, timeout=10).json()
-                    if r_s3.get("counted"):
-                        log("STEP3_MONETAG", "✓ Bước 3 Monetag thành công!", Fore.GREEN)
-                        break
-                    time.sleep(2)
+                log("STEP3_MONETAG", "Bước 3/3: Xem QC Monetag (8.5s)...", Fore.YELLOW)
+                time.sleep(8.5)
+                c3, _ = self.report_step(ses_id, "monetag", max_tries=14)
+                if c3:
+                    log("STEP3_MONETAG", "✓ Bước 3 Monetag thành công!", Fore.GREEN)
 
             # Finish
             r_fin = requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=10).json()
