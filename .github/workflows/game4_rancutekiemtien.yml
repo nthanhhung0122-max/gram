@@ -45,3 +45,12 @@ jobs:
           MAX_RUNTIME_SECONDS: "17500"
         run: |
           python auto_rancutekiemtien.py --loop 15
+
+      - name: Tu dong ban giao ca tiep theo (Handover Chaining 24/7)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Kich hoat ca chay tiep theo cho game4_rancutekiemtien.yml..."
+          sleep 12
+          gh workflow run game4_rancutekiemtien.yml --repo "${{ github.repository }}" || echo "Handover triggered."

@@ -45,3 +45,12 @@ jobs:
           MAX_RUNTIME_SECONDS: "17500"
         run: |
           python auto_redrig.py --loop 10
+
+      - name: Tu dong ban giao ca tiep theo (Handover Chaining 24/7)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Kich hoat ca chay tiep theo cho game3_redrig.yml..."
+          sleep 12
+          gh workflow run game3_redrig.yml --repo "${{ github.repository }}" || echo "Handover triggered."

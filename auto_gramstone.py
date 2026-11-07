@@ -290,7 +290,7 @@ class GramstoneBot:
         log("CARD_MOONPOOL", f"Phiên Thẻ Mỏ #{ses_id} đã mở! Bắt đầu chuỗi 3 QC (Adsgram -> Gigapub -> Monetag)...", Fore.CYAN)
 
         try:
-            # --- BƯỚC 1: ADSGRAM ---
+            # --- BƯỚC 1: ADSGRAM (Chuẩn Moonpool Engine với Full Event Tracking) ---
             log("STEP1_ADSGRAM", "Bước 1/3: Đang tải quảng cáo Adsgram (Block 54796)...", Fore.YELLOW)
             ad_headers = {
                 'User-Agent': self.ua,
@@ -305,32 +305,50 @@ class GramstoneBot:
                 'tg_platform': 'android',
                 'platform': 'Linux armv8l',
                 'language': 'vi',
-                'top_domain': 'gramstone.46-101-143-24.sslip.io',
+                'top_domain': 'sslip.io',
                 'signature': self.sig,
                 'data_check_string': self.dcs,
                 'sdk_version': '2.2.5'
             }
-            r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
-            if r_adv.status_code == 200:
-                reward_url = None
-                for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s]+', r_adv.text):
-                    if 'Reward' in u or 'type=Reward' in u:
-                        reward_url = u
-                        break
-                if reward_url:
-                    log("STEP1_ADSGRAM", "Đang xem video Adsgram (6.5s)...", Fore.YELLOW)
-                    time.sleep(6.5)
-                    requests.get(reward_url, headers=ad_headers, timeout=10)
-                    time.sleep(3)
+            try:
+                r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
+                if r_adv.status_code == 200:
+                    render_u, show_u, reward_u = None, None, None
+                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
+                        if 'type=render' in u or 'type=Render' in u: render_u = u
+                        elif 'type=show' in u or 'type=Show' in u: show_u = u
+                        elif 'Reward' in u or 'type=Reward' in u: reward_u = u
+
+                    if render_u: 
+                        try: requests.get(render_u, headers=ad_headers, timeout=5)
+                        except Exception: pass
+                    time.sleep(1)
+                    if show_u: 
+                        try: requests.get(show_u, headers=ad_headers, timeout=5)
+                        except Exception: pass
+                    
+                    log("STEP1_ADSGRAM", "Đang xem video Adsgram (8.5s theo quy định card_min_step_sec)...", Fore.YELLOW)
+                    time.sleep(8.5)
+
+                    if reward_u:
+                        try: requests.get(reward_u, headers=ad_headers, timeout=8)
+                        except Exception: pass
+                    time.sleep(3.5)
+            except Exception as e:
+                log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e}", Fore.LIGHTBLACK_EX)
+                time.sleep(8.5)
 
             counted_s1 = False
             for _ in range(8):
-                r_s1 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id, "network": "adsgram"}, timeout=10).json()
-                if r_s1.get("counted"):
-                    counted_s1 = True
-                    log("STEP1_ADSGRAM", "✓ Bước 1 Adsgram hoàn thành!", Fore.GREEN)
-                    break
-                time.sleep(2)
+                try:
+                    r_s1 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id, "network": "adsgram"}, timeout=10).json()
+                    if r_s1.get("counted"):
+                        counted_s1 = True
+                        log("STEP1_ADSGRAM", "✓ Bước 1/3 Adsgram hoàn thành thành công!", Fore.GREEN)
+                        break
+                except Exception:
+                    pass
+                time.sleep(2.5)
 
             if not counted_s1:
                 log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram.", Fore.YELLOW)
