@@ -138,6 +138,10 @@ class RedRigBot:
             "Referer": f"{API_BASE}/"
         }
 
+    def get_state(self):
+        """Lấy state mới nhất từ máy chủ REDRIG"""
+        return self.authenticate()
+
     def authenticate(self):
         try:
             r = requests.post(f"{API_BASE}/api/auth", headers=self.get_headers(), json={}, timeout=12)
