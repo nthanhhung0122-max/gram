@@ -44,8 +44,9 @@ init(autoreset=True)
 # -----------------------------------------------------------------
 # CẤU HÌNH HỆ THỐNG
 # -----------------------------------------------------------------
-API_ID = int(os.getenv("TELEGRAM_API_ID", "34333329"))
-API_HASH = os.getenv("TELEGRAM_API_HASH", "4f9371f95000578c84dbc670aaf1f819")
+_raw_id = os.getenv("TELEGRAM_API_ID", "").strip()
+API_ID = int(_raw_id) if _raw_id.isdigit() else 34333329
+API_HASH = os.getenv("TELEGRAM_API_HASH", "").strip() or "4f9371f95000578c84dbc670aaf1f819"
 
 DEFAULT_SESSION_ACC1 = (
     "1BVtsOHIBuxmpWiBJ9hvwV9pSrzWw5U2I5Fe20Ww8l1LCk9rnsG6T6lLZEJXZE1JJC_qUH_yyWHnRoedRNI5lJYnfjRN4gyGeDrCxquDU12ZflrpCz0VLhMZx2C0LlyUCy2eHRSRE1wUCpEYZaymL0P7Z9eAHwMy4Oogewh5TqyO4x4MF6j0yTq8Zvfpv43O4aQDzErNv3GRqpx8DXBcOJIMP9yVhq-Mby5VH5J9cF-h-bJ5ws3xKjA4GY7YKjHxDt9OI-Zr7mr-V3qZy99UxJooThJj51f2RqOKhODdLh9XZQ0ygSoAd3iFAZDOPMEo8Ch5TrrzLXi2Q3N0HorIL1JfV0xoFQlY="
