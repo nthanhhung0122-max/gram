@@ -215,50 +215,66 @@ class RedRigBot:
                 requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
                 time.sleep(2)
 
-        # 2. Nếu chưa có session, chọn Tier tối ưu theo khe trống của Giàn Rack
+        # 2. Nếu chưa có session, chọn Tier tối ưu theo khe trống của Giàn Rack (Hỗ trợ Auto-Fallback chống 429)
         if not ses_id:
             cards = state.get("cards", [])
-            # Tìm tier cao nhất mà fits == True
-            fit_tier = None
+            candidate_tiers = []
             for t in [3, 2, 1]:
                 c_info = next((c for c in cards if c.get("tier") == t), {})
                 if c_info.get("fits"):
-                    fit_tier = c_info
-                    tier = t
-                    chain = c_info.get("chain", ["adsgram"])
-                    break
+                    candidate_tiers.append((t, c_info))
 
-            if not fit_tier:
+            if not candidate_tiers:
                 log("GPU_MOONPOOL", "🖥️ Giàn máy đào Rack đã lấp đầy 100% tất cả các khe cắm! Đang vận hành ở công suất tối đa.", Fore.GREEN)
                 return state
 
-            cd_left = fit_tier.get("cooldown_left_sec", 0)
-            if cd_left > 0:
-                log("GPU_COOLDOWN", f"⏳ Ca cày GPU Tier {tier} đang hồi chiêu (còn {cd_left}s). Đang tự động chờ...", Fore.YELLOW)
-                time.sleep(cd_left + 2)
+            # Thử từng Tier từ cao xuống thấp (Tier 3 -> Tier 2 -> Tier 1)
+            started_session = False
+            for t, c_info in candidate_tiers:
+                tier = t
+                chain = c_info.get("chain", ["adsgram"])
+                cd_left = c_info.get("cooldown_left_sec", 0)
+                if cd_left > 0:
+                    log("GPU_COOLDOWN", f"⏳ Ca cày GPU Tier {tier} đang hồi chiêu ({cd_left}s). Thử Tier khác...", Fore.YELLOW)
+                    continue
 
-            log("GPU_MOONPOOL", f"🚀 Kích hoạt quy trình xem QC cày Card GPU Tier {tier} (+{fit_tier.get('power')}⚡ Power)...", Fore.CYAN)
-            r_start = requests.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": tier}, timeout=10)
-            
-            if r_start.status_code == 429:
-                log("GPU_COOLDOWN", "Gặp giới hạn tần suất (HTTP 429). Chờ 15s để thử lại...", Fore.YELLOW)
-                time.sleep(15)
-                r_start = requests.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": tier}, timeout=10)
+                log("GPU_MOONPOOL", f"🚀 Kích hoạt quy trình xem QC cày Card GPU Tier {tier} (+{c_info.get('power')}⚡ Power)...", Fore.CYAN)
+                try:
+                    r_start = requests.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": tier}, timeout=10)
+                except Exception as e:
+                    log("GPU_WARN", f"Lỗi kết nối khi gọi /api/fish/start Tier {tier}: {e}", Fore.YELLOW)
+                    continue
+                
+                if r_start.status_code == 429:
+                    log("GPU_COOLDOWN", f"⚠️ Tier {tier} bị máy chủ gắn cờ tần suất (HTTP 429). Tự động hạ xuống Tier thấp hơn...", Fore.YELLOW)
+                    time.sleep(2)
+                    continue
 
-            if r_start.status_code != 200:
-                log("GPU_WARN", f"Chưa thể bắt đầu ca mới (HTTP {r_start.status_code})", Fore.YELLOW)
+                if r_start.status_code == 200:
+                    d_start = r_start.json()
+                    if d_start.get("ok"):
+                        ses = d_start.get("session", {})
+                        ses_id = ses.get("id")
+                        chain = ses.get("chain", chain)
+                        start_step = 1
+                        log("GPU_MOONPOOL", f"✅ Khởi tạo thành công Phiên GPU #{ses_id}! Chuỗi {len(chain)} QC: {' -> '.join(chain)}", Fore.GREEN)
+                        started_session = True
+                        break
+                    else:
+                        log("GPU_WARN", f"Thông báo từ REDRIG (Tier {tier}): {d_start.get('error', 'Chưa sẵn sàng')}", Fore.YELLOW)
+                else:
+                    log("GPU_WARN", f"Chưa thể bắt đầu ca mới Tier {tier} (HTTP {r_start.status_code})", Fore.YELLOW)
+
+            if not started_session:
+                # Nếu toàn bộ các Tier GPU đều bị 429 hoặc đang hồi chiêu
+                ru = state.get("rack_unlock", {})
+                if ru.get("can_new"):
+                    log("GPU_FALLBACK", "🔄 Toàn bộ Card GPU đang giới hạn/hồi chiêu. Tự động chuyển sang cày Mở khóa Rack mới...", Fore.MAGENTA)
+                    return self.boost_rack_unlock_chain(state)
+                
+                log("GPU_COOLDOWN", "⏳ Máy chủ REDRIG đang áp dụng hồi chiêu toàn bộ Card GPU. Giãn cách 120s...", Fore.YELLOW)
+                time.sleep(120)
                 return state
-
-            d_start = r_start.json()
-            if not d_start.get("ok"):
-                log("GPU_WARN", f"Thông báo từ REDRIG: {d_start.get('error', 'Chưa sẵn sàng')}", Fore.YELLOW)
-                return state
-
-            ses = d_start.get("session", {})
-            ses_id = ses.get("id")
-            chain = ses.get("chain", chain)
-            start_step = 1
-            log("GPU_MOONPOOL", f"✅ Khởi tạo thành công Phiên GPU #{ses_id}! Chuỗi {len(chain)} QC: {' -> '.join(chain)}", Fore.GREEN)
 
         try:
             # --- BƯỚC 1: ADSGRAM (nếu có trong chuỗi) ---
@@ -640,9 +656,13 @@ async def run_loop_247(bot_instance, interval_mins=0):
         # Kiểm tra Streak sau mỗi ca xem QC
         bot_instance.check_and_claim_streak(state)
 
-        # 3. NGHỈ COOLDOWN 62 GIÂY THEO QUY ĐỊNH CỦA SERVER RỒI CÀY TIẾP NGAY
+        # 3. NGHỈ COOLDOWN VÀ LÀM MỚI STATE TỪ SERVER TRƯỚC CA TIẾP THEO
         log("CONTINUOUS", "⏳ Chờ hồi chiêu 62s trước ca cày quảng cáo tiếp theo...", Fore.LIGHTBLACK_EX)
         await asyncio.sleep(62)
+        # Làm mới state từ máy chủ REDRIG
+        fresh_state = bot_instance.get_state()
+        if fresh_state:
+            state = fresh_state
 
 async def main():
     import argparse
