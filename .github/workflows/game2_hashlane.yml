@@ -1,0 +1,47 @@
+name: Game 2 - Auto HashLane 24/7 (Acc 1 - hungzai22)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Chạy dự phòng mỗi 6 giờ
+    - cron: '10 */6 * * *'
+
+concurrency:
+  group: hashlane-acc1-run
+  cancel-in-progress: true
+
+jobs:
+  run-hashlane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install telethon requests colorama urllib3
+
+      - name: Chay Auto HashLane Mining 24/7
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: "utf-8"
+          GITHUB_REPOSITORY: "nthanhhung0122-max/gram"
+          WORKFLOW_FILE: "game2_hashlane.yml"
+          TELEGRAM_API_ID: "34333329"
+          TELEGRAM_API_HASH: "4f9371f95000578c84dbc670aaf1f819"
+          TELEGRAM_STRING_SESSION: ${{ secrets.TELEGRAM_STRING_SESSION_ACC1 || secrets.TELEGRAM_STRING_SESSION }}
+          GH_PAT: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          MAX_RUNTIME_SECONDS: "17500"
+        run: |
+          python auto_hashlane.py --loop 15

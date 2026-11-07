@@ -210,7 +210,59 @@ class HashLaneBot:
         self.checkin()
         self.collect_and_restart_mining(state)
 
+
+def trigger_next_shift(workflow_file="game2_hashlane.yml"):
+    repo = (os.getenv("GITHUB_REPOSITORY") or "nthanhhung0122-max/gram").strip()
+    wf = (os.getenv("WORKFLOW_FILE") or workflow_file).strip()
+    pat = (os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN") or "").strip()
+    if not wf or not pat:
+        log("HANDOVER", "Không có WORKFLOW_FILE hoặc GitHub Token để retrigger.", Fore.YELLOW)
+        return False
+    log("HANDOVER", f"🔄 Chuẩn bị chuyển giao ca làm việc tiếp theo trên {repo} ({wf})...", Fore.CYAN)
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/dispatches"
+    headers = {
+        "Authorization": f"Bearer {pat}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    try:
+        r = requests.post(url, json={"ref": "main"}, headers=headers, timeout=15)
+        if r.status_code in [200, 204]:
+            log("HANDOVER", f"✅ Đã kích hoạt thành công ca chạy tiếp theo trên {repo} ({wf})!", Fore.GREEN)
+            return True
+        else:
+            log("HANDOVER", f"Phản hồi dispatch: {r.status_code} {r.text}", Fore.YELLOW)
+    except Exception as e:
+        log("HANDOVER", f"Lỗi retrigger: {e}", Fore.RED)
+    return False
+
+async def run_loop_247(bot_instance, interval_mins=15):
+    raw_rt = os.getenv("MAX_RUNTIME_SECONDS", "17500").strip()
+    max_runtime = int(raw_rt) if raw_rt.isdigit() else 17500
+    start_time = time.time()
+    cycle = 1
+    while True:
+        log("LOOP", f"🌀 === BẮT ĐẦU CHU KỲ #{cycle} (HashLane) ===", Fore.MAGENTA)
+        try:
+            await bot_instance.run_cycle()
+        except Exception as e:
+            log("CYCLE_ERR", f"Lỗi chu kỳ #{cycle}: {e}", Fore.RED)
+        
+        cycle += 1
+        elapsed = time.time() - start_time
+        if elapsed >= max_runtime:
+            log("HANDOVER", f"⏰ Hoàn thành ca trực ({elapsed/3600:.1f}h). Tự động chuyển giao ca tiếp theo...", Fore.CYAN)
+            trigger_next_shift("game2_hashlane.yml")
+            break
+        
+        log("LOOP", f"⏳ Nghỉ {interval_mins} phút trước chu kỳ tiếp theo (Đã trực {elapsed//60}m)...", Fore.YELLOW)
+        await asyncio.sleep(interval_mins * 60)
+
 async def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Bot Auto HashLane ($TON) 24/7")
+    parser.add_argument("--loop", type=int, default=0, help="Số phút lặp lại (0 để chạy 1 lần)")
+    args, _ = parser.parse_known_args()
+
     print(Fore.YELLOW + """
 =============================================================================
   BOT AUTO HASHLANE ($TON) 24/7 - CHUẨN X-DEVICE FINGERPRINT
@@ -218,7 +270,10 @@ async def main():
 =============================================================================
     """ + Style.RESET_ALL)
     bot = HashLaneBot()
-    await bot.run_cycle()
+    if args.loop > 0:
+        await run_loop_247(bot, interval_mins=args.loop)
+    else:
+        await bot.run_cycle()
 
 if __name__ == "__main__":
     asyncio.run(main())
