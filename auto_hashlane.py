@@ -2,17 +2,27 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================================
-  BOT AUTO HASHLANE ($TON) 24/7 - KHAI THÁC & THU HOẠCH ĐIỂM TỰ ĐỘNG
+  BOT AUTO HASHLANE ($TON) 24/7 PRO - TỐI ƯU HÓA TOÀN DIỆN CHUẨN MOONPOOL
   Platform: HashLane Mini App (https://46-101-192-249.sslip.io/app/)
   Telegram Bot: @hashlane_bot
   
-  TÍNH NĂNG TỰ ĐỘNG HÓA 100%:
+  CÁC TÍNH NĂNG TỰ ĐỘNG HÓA VƯỢT TRỘI:
     1. Chuẩn hóa mã băm thiết bị X-Device SHA-256 + X-Tz-Offset.
-    2. Tự động điểm danh nhận điểm & Gems hàng ngày (/api/checkin).
-    3. Tự động kiểm tra trạng thái mỏ đào (/api/me).
-    4. Tự động THU HOẠCH ĐIỂM (/api/mining/collect) khi mỏ đạt 100 điểm (Full).
-    5. Tự động KÍCH HOẠT VÒNG ĐÀO MỚI (/api/mining/start) ngay sau khi thu hoạch.
-    6. Tự động kiểm tra & nhận nhiệm vụ kiếm thêm điểm (/api/tasks/start & check).
+    2. Điểm danh tự động Daily Streak 7 ngày (/api/checkin).
+    3. Tự động THU HOẠCH NHÂN ĐÔI ĐIỂM (Double Collect 2x) bằng xem QC (/api/mining/collect double=true)
+       -> Thu hoạch gấp đôi số điểm (+200 điểm/ca thay vì 100 điểm thông thường).
+    4. Tự động GIA HẠN CA ĐÀO (Mining Extend +30 phút) bằng xem QC (/api/mining/extend via=ad)
+       -> Mở rộng thời lượng và kho chứa hoàn toàn miễn phí.
+    5. Tự động CÀY GEMS MIỄN PHÍ mỗi ngày (/api/ads/begin purpose=gem -> 5 Gems/ngày).
+    6. Cơ chế Anti-429 Cooldown: Tự động điều tiết next_ad_at và giãn cách giữa các ca quảng cáo.
+    7. Tự động NÂNG CẤP MÁY ĐÀO (Upgrades) khi đủ điểm:
+       - Cooling: Tăng thời gian đào mỗi phiên (+900s)
+       - PSU: Tăng tốc độ thu hoạch điểm (+5%)
+       - Battery: Tăng số lượt gia hạn bằng QC
+    8. Tự động LÀM VÀ NHẬN THƯỞNG NHIỆM VỤ (Tasks):
+       - Tự động join channel Telegram chính thức và nhận điểm thưởng.
+    9. Tự động KÍCH HOẠT CA ĐÀO MỚI ngay sau khi thu hoạch.
+   10. Cơ chế Handover Chaining 24/7 tự động chuyển giao ca tiếp theo trên GitHub Actions.
 =============================================================================
 """
 
@@ -21,6 +31,7 @@ import sys
 import time
 import json
 import random
+import re
 import hashlib
 import asyncio
 import urllib.parse
@@ -30,6 +41,7 @@ from colorama import init, Fore, Style
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import RequestWebViewRequest
+from telethon.tl.functions.channels import JoinChannelRequest
 
 init(autoreset=True)
 
@@ -52,16 +64,18 @@ SESSION_FILE_PATH = os.getenv("TELEGRAM_SESSION_PATH", "C:/Users/Administrator/D
 
 def log(tag, msg, color=Fore.WHITE):
     t_str = time.strftime('%H:%M:%S')
-    print(f"{Fore.LIGHTBLACK_EX}[{t_str}]{Style.RESET_ALL} {color}[{tag:<10}]{Style.RESET_ALL} {msg}")
+    print(f"{Fore.LIGHTBLACK_EX}[{t_str}]{Style.RESET_ALL} {color}[{tag:<14}]{Style.RESET_ALL} {msg}")
 
 class HashLaneBot:
     def __init__(self, string_session=None, session_path=None):
         self.string_session = string_session or STRING_SESSION
         self.session_path = session_path or SESSION_FILE_PATH
         self.init_data = None
+        self.user_id = None
         self.username = None
         self.points = 0
         self.gems = 0
+        self.next_ad_at = 0
         
         parts = [
             "Mozilla/5.0 (Linux; Android 14; SM-S928B Build/UP1A.231005.007; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 Mobile Safari/537.36 Telegram-Android/11.5.0",
@@ -89,7 +103,7 @@ class HashLaneBot:
             if not await client.is_user_authorized():
                 log("TELEGRAM", "❌ Phiên Telegram không được ủy quyền!", Fore.RED)
                 await client.disconnect()
-                return False
+                return False, None
 
             bot_entity = await client.get_entity("hashlane_bot")
             res = await client(RequestWebViewRequest(
@@ -98,20 +112,20 @@ class HashLaneBot:
                 url="https://46-101-192-249.sslip.io/app/",
                 platform="android"
             ))
-            await client.disconnect()
 
             frag = res.url.split("#tgWebAppData=")[1].split("&tgWebAppVersion")[0]
             self.init_data = urllib.parse.unquote(frag)
             params = dict(urllib.parse.parse_qsl(self.init_data))
             user_obj = json.loads(params.get("user", "{}"))
-            self.username = user_obj.get("username", str(user_obj.get("id")))
-            log("TELEGRAM", f"✅ Lấy init_data thành công cho @{self.username}", Fore.GREEN)
-            return True
+            self.user_id = str(user_obj.get("id"))
+            self.username = user_obj.get("username", self.user_id)
+            log("TELEGRAM", f"✅ Lấy init_data thành công cho @{self.username} (ID: {self.user_id})", Fore.GREEN)
+            return True, client
         except Exception as e:
             log("TELEGRAM_ERR", f"Lỗi lấy WebApp Data: {e}", Fore.RED)
             if client and client.is_connected():
                 await client.disconnect()
-            return False
+            return False, None
 
     def get_headers(self):
         return {
@@ -136,12 +150,14 @@ class HashLaneBot:
                     b = d.get("balances", {})
                     self.points = b.get("points", 0)
                     self.gems = b.get("gems", 0)
+                    ads_info = d.get("ads", {})
+                    self.next_ad_at = ads_info.get("next_ad_at", 0)
                     m = d.get("mining", {})
-                    ses = m.get("session", {})
+                    ses = m.get("session") or {}
                     earned = ses.get("earned", 0)
                     capacity = ses.get("capacity", 100)
                     is_ready = ses.get("ready", False)
-                    log("STATE", f"👤 User: @{u.get('username')} | Điểm: {self.points} | Gems: {self.gems} | Kho đào: {earned}/{capacity} (Sẵn sàng: {is_ready})", Fore.CYAN)
+                    log("STATE", f"👤 User: @{u.get('username')} | Điểm: {self.points} 🪙 | Gems: {self.gems} 💎 | Kho: {earned}/{capacity} (Sẵn sàng: {is_ready})", Fore.CYAN)
                     return d
             else:
                 log("STATE_ERR", f"Lỗi lấy trạng thái HTTP {r.status_code}", Fore.RED)
@@ -154,17 +170,123 @@ class HashLaneBot:
             r = requests.post(f"{API_BASE}/checkin", headers=self.get_headers(), json={}, timeout=10)
             if r.status_code == 200:
                 d = r.json().get("data", {})
-                log("CHECKIN", f"🎉 Điểm danh thành công Ngày {d.get('day', 1)}: +{d.get('points', 0)} Điểm!", Fore.GREEN)
+                pts = d.get("points", 0)
+                gems = d.get("gems", 0)
+                log("CHECKIN", f"🎉 Điểm danh thành công Ngày {d.get('day', 1)}: +{pts} Điểm, +{gems} Gems!", Fore.GREEN)
+                self.points += pts
+                self.gems += gems
             elif r.status_code == 409:
                 log("CHECKIN", "ℹ️ Hôm nay đã điểm danh rồi.", Fore.LIGHTBLACK_EX)
         except Exception:
             pass
 
-    def collect_and_restart_mining(self, state_data):
+    def check_ad_cooldown(self, srv_time):
+        """Tự động kiểm tra và chờ hồi chiêu giữa 2 lần xem quảng cáo chống 429"""
+        if self.next_ad_at and self.next_ad_at > srv_time:
+            cd = int((self.next_ad_at - srv_time) / 1000)
+            if cd > 0:
+                wait_time = min(cd + 2, 35)
+                log("AD_COOLDOWN", f"⏳ Ca quảng cáo đang trong thời gian hồi chiêu (còn {cd}s). Đang chờ {wait_time}s...", Fore.YELLOW)
+                time.sleep(wait_time)
+
+    def watch_ad_for_token(self, purpose, session_id=0, srv_time=0):
+        """
+        Khởi tạo và hoàn tất chuỗi xem quảng cáo để lấy token xác nhận:
+        - purpose: 'collect_2x' (nhân đôi thu hoạch), 'extend' (gia hạn mỏ), 'gem' (nhận gem)
+        """
+        self.check_ad_cooldown(srv_time or int(time.time() * 1000))
+
+        payload = {"purpose": purpose}
+        if session_id:
+            payload["session_id"] = session_id
+
+        try:
+            r_ab = requests.post(f"{API_BASE}/ads/begin", headers=self.get_headers(), json=payload, timeout=12)
+            if r_ab.status_code == 429:
+                log("AD_COOLDOWN", "Gặp giới hạn tần suất quảng cáo (HTTP 429). Chờ 30s...", Fore.YELLOW)
+                time.sleep(30)
+                return None
+
+            if r_ab.status_code != 200:
+                log("AD_WARN", f"Chưa thể khởi tạo QC cho {purpose} (HTTP {r_ab.status_code})", Fore.YELLOW)
+                return None
+            
+            d = r_ab.json().get("data", {})
+            token = d.get("token")
+            networks = d.get("networks", [])
+            if not token:
+                log("AD_WARN", f"Không nhận được token QC cho {purpose}", Fore.YELLOW)
+                return None
+
+            log("AD_START", f"🎬 Bắt đầu xem QC ({purpose})... Đang chờ đủ 18s theo chuẩn chống gian lận máy chủ...", Fore.YELLOW)
+            
+            # Ping Adsgram thật nếu mạng trả về là adsgram
+            net_code = "adsgram"
+            if networks and isinstance(networks, list):
+                first_net = networks[0]
+                net_code = first_net.get("code", "adsgram")
+                if net_code == "adsgram":
+                    block_id = first_net.get("config", {}).get("block_id", "54722")
+                    try:
+                        ad_headers = {
+                            'User-Agent': self.ua,
+                            'Origin': 'https://46-101-192-249.sslip.io',
+                            'Referer': 'https://46-101-192-249.sslip.io/app/',
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'org.telegram.messenger'
+                        }
+                        adv_params = {
+                            'blockId': str(block_id),
+                            'tg_id': str(self.user_id),
+                            'tg_platform': 'android',
+                            'platform': 'Linux armv8l',
+                            'language': 'vi',
+                            'top_domain': 'sslip.io'
+                        }
+                        r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=8)
+                        if r_adv.status_code == 200:
+                            for ev in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
+                                if 'type=render' in ev or 'type=show' in ev:
+                                    requests.get(ev, headers=ad_headers, timeout=5)
+                    except Exception:
+                        pass
+
+            # Chờ đủ 18 giây để vượt qua kiểm tra 'ad_too_fast' của server Hashlane
+            time.sleep(18)
+
+            # Gửi xác nhận hoàn tất quảng cáo
+            complete_payload = {
+                "token": token,
+                "network": net_code,
+                "attempts": [{"code": net_code, "result": "shown"}]
+            }
+            for attempt in range(5):
+                r_comp = requests.post(f"{API_BASE}/ads/complete", headers=self.get_headers(), json=complete_payload, timeout=12)
+                if r_comp.status_code == 200 and r_comp.json().get("ok"):
+                    res_data = r_comp.json().get("data", {})
+                    ads_meta = res_data.get("ads", {})
+                    self.next_ad_at = ads_meta.get("next_ad_at", 0)
+                    log("AD_SUCCESS", f"✓ Đã xem thành công QC ({purpose})! Nhận token xác thực.", Fore.GREEN)
+                    return token
+                elif r_comp.status_code == 409:
+                    err_code = r_comp.json().get("error", {}).get("code", "")
+                    if err_code == "ad_too_fast":
+                        time.sleep(3)
+                        continue
+                    elif err_code == "ad_used":
+                        return token
+                time.sleep(2)
+        except Exception as e:
+            log("AD_ERR", f"Lỗi trong quy trình xem QC {purpose}: {e}", Fore.RED)
+        return None
+
+    def manage_mining(self, state_data):
+        """Quản lý mỏ đào: Thu hoạch nhân đôi (2x), gia hạn mỏ, hoặc khởi động phiên mới"""
         m = state_data.get("mining", {}) if state_data else {}
         ses = m.get("session")
+        srv_time = state_data.get("server_time", int(time.time() * 1000))
+
         if not ses:
-            # Chưa có phiên đào nào -> Khởi động ngay
             log("MINING", "▶️ Chưa có phiên đào, tiến hành khởi động máy đào...", Fore.YELLOW)
             try:
                 r = requests.post(f"{API_BASE}/mining/start", headers=self.get_headers(), json={}, timeout=10)
@@ -172,43 +294,180 @@ class HashLaneBot:
                     log("MINING", "✅ Đã bắt đầu ca đào mới 3600s (100 điểm/giờ)!", Fore.GREEN)
             except Exception as e:
                 log("MINING_ERR", f"Lỗi start mining: {e}", Fore.RED)
-            return
+            return False
 
         is_ready = ses.get("ready", False)
         earned = ses.get("earned", 0)
         capacity = ses.get("capacity", 100)
+        ses_id = ses.get("id")
+        ads_info = state_data.get("ads", {})
+        can_watch_ad = ads_info.get("rewarded_today", 0) < ads_info.get("rewarded_per_day", 40)
 
+        # 1. Thu hoạch mỏ đào khi đầy hoặc sẵn sàng (Ưu tiên cày QC nhân đôi điểm 2x)
         if is_ready or earned >= capacity:
-            log("COLLECT", f"⛏️ Kho đào đã đầy ({earned}/{capacity} điểm). Tiến hành thu hoạch...", Fore.YELLOW)
+            log("COLLECT", f"⛏️ Kho đào đã đầy ({earned}/{capacity} điểm)! Chuẩn bị thu hoạch...", Fore.YELLOW)
+            double = False
+            token = ""
+            if can_watch_ad:
+                log("COLLECT_2X", "🚀 Kích hoạt cày QC để NHÂN ĐÔI ĐIỂM (Double Collect 2x)...", Fore.MAGENTA)
+                ad_token = self.watch_ad_for_token("collect_2x", session_id=ses_id, srv_time=srv_time)
+                if ad_token:
+                    double = True
+                    token = ad_token
+            
             try:
-                r_c = requests.post(f"{API_BASE}/mining/collect", headers=self.get_headers(), json={"double": False}, timeout=12)
+                col_payload = {"double": double}
+                if token:
+                    col_payload["token"] = token
+                r_c = requests.post(f"{API_BASE}/mining/collect", headers=self.get_headers(), json=col_payload, timeout=12)
                 if r_c.status_code == 200:
                     cd = r_c.json().get("data", {})
-                    self.points = cd.get("balance", self.points + earned)
-                    log("COLLECT", f"🎉 THU HOẠCH THÀNH CÔNG +{cd.get('points', earned)} ĐIỂM! Số dư mới: {self.points} điểm.", Fore.GREEN)
+                    pts_got = cd.get("points", earned * (2 if double else 1))
+                    self.points = cd.get("balance", self.points + pts_got)
+                    log("COLLECT_SUCCESS", f"🎉🎉🎉 THU HOẠCH THÀNH CÔNG {'[NHÂN ĐÔI 2X]' if double else ''} +{pts_got} ĐIỂM! Số dư mới: {self.points} điểm.", Fore.GREEN)
                     
-                    # Ngay sau khi collect, hệ thống thường tự động khởi động phiên mới
-                    new_ses = cd.get("session")
-                    if not new_ses or new_ses.get("earned", 0) > 0:
-                        requests.post(f"{API_BASE}/mining/start", headers=self.get_headers(), json={}, timeout=10)
+                    # Tự động bắt đầu ca mới
+                    time.sleep(2)
+                    r_new = requests.post(f"{API_BASE}/mining/start", headers=self.get_headers(), json={}, timeout=10)
+                    if r_new.status_code == 200:
+                        log("MINING", "✅ Đã tự động kích hoạt ca đào mới 3600s!", Fore.GREEN)
                 else:
                     log("COLLECT_ERR", f"Lỗi thu hoạch: {r_c.text[:100]}", Fore.YELLOW)
             except Exception as e:
                 log("COLLECT_ERR", f"Lỗi collect: {e}", Fore.RED)
+            return True
+
+        # 2. Gia hạn ca đào (+30 phút) bằng QC nếu chưa gia hạn
+        p = m.get("params", {})
+        ad_ext_done = ses.get("ad_extends", 0)
+        max_ad_ext = p.get("ad_extends", 1)
+        if ad_ext_done < max_ad_ext and can_watch_ad:
+            log("EXTEND", f"⏳ Phiên đào đang chạy ({earned}/{capacity} điểm). Tự động cày QC gia hạn thêm {p.get('extend_seconds', 1800)//60} phút...", Fore.CYAN)
+            ext_token = self.watch_ad_for_token("extend", session_id=ses_id, srv_time=srv_time)
+            if ext_token:
+                try:
+                    r_ext = requests.post(f"{API_BASE}/mining/extend", headers=self.get_headers(), json={"via": "ad", "token": ext_token}, timeout=10)
+                    if r_ext.status_code == 200:
+                        log("EXTEND_SUCCESS", "✅ Gia hạn mỏ đào thành công! Kho chứa và thời gian đào đã được mở rộng.", Fore.GREEN)
+                        return True
+                except Exception as e:
+                    log("EXTEND_ERR", f"Lỗi extend: {e}", Fore.RED)
         else:
             log("MINING", f"⏳ Máy đào đang hoạt động: {earned}/{capacity} điểm. Vòng đào tiếp theo sẽ đầy sau.", Fore.CYAN)
+        return False
+
+    def claim_daily_gems(self, state_data):
+        """Cày Gems miễn phí mỗi ngày (tối đa 5 Gems/ngày)"""
+        ads_info = state_data.get("ads", {})
+        gems_today = ads_info.get("gems_today", 0)
+        gems_max = ads_info.get("gems_per_day", 5)
+        srv_time = state_data.get("server_time", int(time.time() * 1000))
+
+        if gems_today < gems_max:
+            log("GEM_AD", f"💎 Tiến độ Gems hôm nay: {gems_today}/{gems_max}. Bắt đầu cày QC nhận +1 Gem...", Fore.MAGENTA)
+            tok = self.watch_ad_for_token("gem", srv_time=srv_time)
+            if tok:
+                self.gems += 1
+                log("GEM_SUCCESS", f"🎉 ĐÃ NHẬN THÊM +1 GEM MIỄN PHÍ! Tổng Gems: {self.gems}", Fore.GREEN)
+                return True
+        else:
+            log("GEM_INFO", f"💎 Hôm nay đã cày đủ tối đa {gems_today}/{gems_max} Gems!", Fore.GREEN)
+        return False
+
+    def auto_upgrades(self, state_data):
+        """Tự động nâng cấp giàn máy đào khi tích lũy đủ điểm"""
+        upgrades = state_data.get("upgrades", [])
+        if not upgrades:
+            return
+
+        order = {"cooling": 1, "psu": 2, "battery": 3}
+        upgrades_sorted = sorted(upgrades, key=lambda x: order.get(x.get("code"), 99))
+
+        for u in upgrades_sorted:
+            code = u.get("code")
+            lv = u.get("level", 0)
+            max_lv = u.get("max", 3)
+            next_cost = u.get("next_cost", 999999)
+
+            if lv < max_lv and self.points >= next_cost:
+                log("UPGRADE", f"⚡ Đủ điều kiện nâng cấp {code.upper()} lên Cấp {lv + 1} (Chi phí: {next_cost} điểm)...", Fore.YELLOW)
+                try:
+                    r = requests.post(f"{API_BASE}/upgrades/buy", headers=self.get_headers(), json={"code": code}, timeout=10)
+                    if r.status_code == 200:
+                        d = r.json()
+                        if d.get("ok"):
+                            self.points -= next_cost
+                            log("UPGRADE_SUCCESS", f"🎉 NÂNG CẤP THÀNH CÔNG {code.upper()} LÊN CẤP {lv + 1}! Số dư điểm còn lại: {self.points}", Fore.GREEN)
+                except Exception as e:
+                    log("UPGRADE_ERR", f"Lỗi nâng cấp {code}: {e}", Fore.RED)
+
+    async def process_tasks(self, client=None):
+        """Tự động kiểm tra và hoàn thành các nhiệm vụ Tasks"""
+        try:
+            r = requests.get(f"{API_BASE}/tasks?tg_platform=android", headers=self.get_headers(), timeout=10)
+            if r.status_code != 200:
+                return
+            tasks = r.json().get("data", {}).get("tasks", [])
+            for t in tasks:
+                t_id = t.get("id")
+                state = t.get("state", "new")
+                title = t.get("title", "")
+                t_type = t.get("type", "")
+                pts = t.get("reward_points", 0)
+                gems = t.get("reward_gems", 0)
+
+                if state in ["new", "started"]:
+                    log("TASK", f"📋 Phát hiện nhiệm vụ: '{title}' (+{pts} Điểm, +{gems} Gems)...", Fore.CYAN)
+                    if t_type == "join_channel" and client:
+                        url = t.get("url", "")
+                        channel_name = url.split("/")[-1]
+                        try:
+                            ch_entity = await client.get_entity(channel_name)
+                            await client(JoinChannelRequest(ch_entity))
+                            log("TASK", f"✅ Đã tự động join channel Telegram @{channel_name}", Fore.GREEN)
+                        except Exception as e:
+                            log("TASK_WARN", f"Không thể tự động join {channel_name}: {e}", Fore.YELLOW)
+                    
+                    if state == "new":
+                        requests.post(f"{API_BASE}/tasks/start", headers=self.get_headers(), json={"id": t_id}, timeout=10)
+                        await asyncio.sleep(t.get("min_seconds", 10) + 1)
+
+                    r_chk = requests.post(f"{API_BASE}/tasks/check", headers=self.get_headers(), json={"id": t_id}, timeout=10)
+                    if r_chk.status_code == 200 and r_chk.json().get("ok"):
+                        log("TASK_SUCCESS", f"🎉 HOÀN THÀNH NHIỆM VỤ '{title}'! +{pts} Điểm, +{gems} Gems", Fore.GREEN)
+                        self.points += pts
+                        self.gems += gems
+        except Exception as e:
+            log("TASK_ERR", f"Lỗi xử lý Tasks: {e}", Fore.RED)
 
     async def run_cycle(self):
-        ok = await self.fetch_tg_init_data()
+        ok, client = await self.fetch_tg_init_data()
         if not ok:
             return
         
-        state = self.get_state()
-        if not state:
-            return
+        try:
+            state = self.get_state()
+            if not state:
+                return
 
-        self.checkin()
-        self.collect_and_restart_mining(state)
+            # 1. Điểm danh nhận thưởng Daily Streak
+            self.checkin()
+
+            # 2. Xử lý nhiệm vụ kiếm thêm điểm & Gems
+            await self.process_tasks(client)
+
+            # 3. Thu hoạch & Khởi động mỏ đào (Ưu tiên cày QC nhân đôi điểm 2x hoặc gia hạn mỏ)
+            ad_performed = self.manage_mining(state)
+
+            # 4. Nếu chưa xem QC trong lượt này, tranh thủ cày Gems miễn phí (tối đa 5 Gems/ngày)
+            if not ad_performed:
+                self.claim_daily_gems(state)
+
+            # 5. Tự động nâng cấp giàn máy khi đủ điểm
+            self.auto_upgrades(state)
+        finally:
+            if client and client.is_connected():
+                await client.disconnect()
 
 
 def trigger_next_shift(workflow_file="game2_hashlane.yml"):
@@ -241,7 +500,7 @@ async def run_loop_247(bot_instance, interval_mins=15):
     start_time = time.time()
     cycle = 1
     while True:
-        log("LOOP", f"🌀 === BẮT ĐẦU CHU KỲ #{cycle} (HashLane) ===", Fore.MAGENTA)
+        log("LOOP", f"🌀 === BẮT ĐẦU CHU KỲ #{cycle} (HashLane PRO) ===", Fore.MAGENTA)
         try:
             await bot_instance.run_cycle()
         except Exception as e:
@@ -259,14 +518,14 @@ async def run_loop_247(bot_instance, interval_mins=15):
 
 async def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Bot Auto HashLane ($TON) 24/7")
+    parser = argparse.ArgumentParser(description="Bot Auto HashLane ($TON) 24/7 PRO")
     parser.add_argument("--loop", type=int, default=0, help="Số phút lặp lại (0 để chạy 1 lần)")
     args, _ = parser.parse_known_args()
 
     print(Fore.YELLOW + """
 =============================================================================
-  BOT AUTO HASHLANE ($TON) 24/7 - CHUẨN X-DEVICE FINGERPRINT
-  Tự động Thu Hoạch 100 Điểm Kho Đầy | Tự động Bắt Đầu Vòng Mới | Điểm Danh
+  BOT AUTO HASHLANE ($TON) 24/7 PRO - CHUẨN X-DEVICE FINGERPRINT & MOONPOOL
+  Tự động Thu Hoạch Nhân Đôi (2X) | Cày Gems Miễn Phí | Gia Hạn Mỏ | Nâng Cấp
 =============================================================================
     """ + Style.RESET_ALL)
     bot = HashLaneBot()
