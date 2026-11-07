@@ -396,7 +396,7 @@ class RedRigBot:
                 log("STREAK_ERR", f"Lỗi nhận thưởng Streak: {e}", Fore.RED)
 
     def manage_racks(self, state):
-        """Quản lý và kích hoạt giàn máy đào Rack"""
+        """Quản lý và hiển thị trạng thái các giàn máy đào Rack"""
         racks = state.get("racks", []) if state else []
         for rk in racks:
             idx = rk.get("idx", 1)
@@ -405,41 +405,76 @@ class RedRigBot:
             free = rk.get("free_spaces", 0)
             log("RACK", f"🖥️ Rack #{idx}: {'Đang hoạt động' if active else 'Chưa kích hoạt'} | Cắm {cards} Card GPU | Trống {free} chỗ", Fore.CYAN)
 
-        try:
-            r = requests.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": "new"}, timeout=10)
-            if r.status_code == 200:
-                pass
-        except Exception:
-            pass
-
     def boost_rack_unlock_chain(self, state):
-        """Xem chuỗi 3 QC để mở khóa thêm Rack máy đào mới"""
+        """Xem chuỗi 3 QC để mở khóa thêm Rack máy đào mới (Chuẩn chống 429 & Resume Open Session)"""
         cfg = state.get("config", {})
         block_id = cfg.get("networks", {}).get("adsgram", {}).get("block_id") or "58154"
         ru = state.get("rack_unlock", {})
         done = ru.get("ads_done", 0)
         needed = ru.get("ads_needed", 9)
-        
-        log("RACK_UNLOCK", f"🔓 Kích hoạt chuỗi QC mở khóa Giàn Máy Đào Rack mới (Tiến độ: {done}/{needed} ads)...", Fore.CYAN)
-        
-        r_start = requests.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": "new"}, timeout=10)
-        if r_start.status_code != 200:
-            log("RACK_WARN", f"Chưa thể mở khóa rack (HTTP {r_start.status_code})", Fore.YELLOW)
-            return state
+        srv_time = state.get("server_time", int(time.time() * 1000))
 
-        d_start = r_start.json()
-        if not d_start.get("ok"):
-            log("RACK_WARN", f"Thông báo: {d_start.get('error')}", Fore.YELLOW)
-            return state
+        # 1. Kiểm tra Cooldown hồi chiêu của Rack Unlock (ready_at)
+        ready_at = ru.get("ready_at", 0)
+        if ready_at and ready_at > srv_time:
+            cd_left = int((ready_at - srv_time) / 1000)
+            if cd_left > 0:
+                log("RACK_COOLDOWN", f"⏳ Ca mở khóa Rack đang trong thời gian hồi chiêu (còn {cd_left}s). Đang tự động chờ...", Fore.YELLOW)
+                time.sleep(min(cd_left + 2, 65))
+                return state
 
-        ses = d_start.get("session", {})
-        ses_id = ses.get("id")
-        chain = ses.get("chain", ["adsgram", "gigapub", "monetag"])
-        log("RACK_UNLOCK", f"✅ Phiên Unlock Rack #{ses_id} đã mở! Chuỗi {len(chain)} QC: {' -> '.join(chain)}", Fore.GREEN)
+        ses_id = None
+        chain = ["adsgram", "gigapub", "monetag"]
+        start_step = 1
+
+        # 2. Tự động kiểm tra & khôi phục nếu đang có open_session cho Rack
+        open_ses = state.get("open_session")
+        if open_ses and open_ses.get("id"):
+            exp = open_ses.get("expires_at", 0)
+            purpose = open_ses.get("purpose", "")
+            if purpose == "rack" and exp > srv_time:
+                ses_id = open_ses.get("id")
+                chain = open_ses.get("chain", chain)
+                steps_done = open_ses.get("steps_done", 0)
+                start_step = steps_done + 1
+                log("RACK_UNLOCK", f"Phát hiện ca mở Rack #{ses_id} đang mở (Đã xong {steps_done}/{len(chain)} bước). Tiếp tục từ bước {start_step}!", Fore.MAGENTA)
+            elif exp <= srv_time:
+                log("RACK_UNLOCK", f"Phiên cũ #{open_ses.get('id')} đã hết hạn. Đang đóng...", Fore.YELLOW)
+                try: requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
+                except Exception: pass
+                time.sleep(2)
+
+        # 3. Khởi tạo phiên Unlock Rack nếu chưa có session
+        if not ses_id:
+            log("RACK_UNLOCK", f"🔓 Kích hoạt chuỗi QC mở khóa Giàn Máy Đào Rack mới (Tiến độ: {done}/{needed} ads)...", Fore.CYAN)
+            r_start = requests.post(f"{API_BASE}/api/rack/start", headers=self.get_headers(), json={"target": "new"}, timeout=10)
+            
+            if r_start.status_code == 429:
+                err_data = {}
+                try: err_data = r_start.json()
+                except Exception: pass
+                log("RACK_COOLDOWN", f"Gặp giới hạn tần suất mở rack (HTTP 429: {err_data.get('code', 'cooldown')}). Chờ 65s...", Fore.YELLOW)
+                time.sleep(65)
+                return state
+
+            if r_start.status_code != 200:
+                log("RACK_WARN", f"Chưa thể mở khóa rack (HTTP {r_start.status_code})", Fore.YELLOW)
+                return state
+
+            d_start = r_start.json()
+            if not d_start.get("ok"):
+                log("RACK_WARN", f"Thông báo: {d_start.get('error')}", Fore.YELLOW)
+                return state
+
+            ses = d_start.get("session", {})
+            ses_id = ses.get("id")
+            chain = ses.get("chain", chain)
+            start_step = 1
+            log("RACK_UNLOCK", f"✅ Phiên Unlock Rack #{ses_id} đã mở! Chuỗi {len(chain)} QC: {' -> '.join(chain)}", Fore.GREEN)
 
         try:
             # Step 1: Adsgram
-            if "adsgram" in chain:
+            if "adsgram" in chain and start_step <= 1:
                 log("STEP1_ADSGRAM", "Bước 1/3: Xem QC Adsgram mở Rack...", Fore.YELLOW)
                 ad_headers = {
                     'User-Agent': self.ua, 'Origin': API_BASE, 'Referer': f"{API_BASE}/",
@@ -466,7 +501,7 @@ class RedRigBot:
                     time.sleep(2)
 
             # Step 2: Gigapub
-            if "gigapub" in chain:
+            if "gigapub" in chain and start_step <= 2:
                 log("STEP2_GIGAPUB", "Bước 2/3: Xem QC Gigapub (6.5s)...", Fore.YELLOW)
                 time.sleep(6.5)
                 for _ in range(5):
@@ -477,7 +512,7 @@ class RedRigBot:
                     time.sleep(2)
 
             # Step 3: Monetag
-            if "monetag" in chain:
+            if "monetag" in chain and start_step <= 3:
                 log("STEP3_MONETAG", "Bước 3/3: Xem QC Monetag (6.5s)...", Fore.YELLOW)
                 time.sleep(6.5)
                 for _ in range(5):
@@ -492,8 +527,13 @@ class RedRigBot:
             if r_fin.get("ok"):
                 nst = r_fin.get("state", {})
                 nru = nst.get("rack_unlock", {})
-                new_done = nru.get("ads_done", done + 3)
-                log("RACK_SUCCESS", f"🎉 HOÀN THÀNH CHUỖI MỞ RACK! Tiến độ mới: {new_done}/{needed} ads", Fore.GREEN)
+                rk = r_fin.get("rack", {})
+                applied = rk.get("applied")
+                if applied:
+                    log("RACK_SUCCESS", f"🎉🎉🎉 CHÚC MỪNG! ĐÃ MỞ KHÓA THÀNH CÔNG RACK #{applied.get('idx', 2)}!", Fore.GREEN)
+                else:
+                    new_done = nru.get("ads_done", done + 3)
+                    log("RACK_SUCCESS", f"🎉 HOÀN THÀNH CHUỖI MỞ RACK! Tiến độ mới: {new_done}/{needed} ads", Fore.GREEN)
                 return nst
         except Exception as e:
             log("RACK_ERR", f"Lỗi trong chuỗi mở rack: {e}", Fore.RED)
