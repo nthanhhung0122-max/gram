@@ -2,21 +2,22 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================================
-  BOT AUTO GRAMSTONE ($GRAM / $TON) 24/7 - CHUẨN CƠ CHẾ MỚI MOONPOOL 100%
+  BOT AUTO GRAMSTONE ($GRAM / $TON) 24/7 - BẢN FIX TRIỆT ĐỂ MOONPOOL 2026
   Platform: Gramstone Mini App (https://gramstone.46-101-143-24.sslip.io/)
   Telegram Bot: @gramstone_bot
   
-  CẬP NHẬT CƠ CHẾ MỚI ĐỘT PHÁ (THEO KIỂU MOONPOOL):
-    1. BỎ HOÀN TOÀN xem video nâng cấp Xe Mỏ & các tool cũ (đã chuyển sang invites).
-    2. TẬP TRUNG 100% CÀY THẺ MỎ TIER 3 (SAFIR) buff +4 GH/s mỗi thẻ (24h) liên tục.
-    3. Chuỗi 3 QC chuẩn Native Moonpool Engine:
-       - Bước 1: Adsgram (Block 54796) với ping Reward URL thực tế để vượt Server Verification.
-       - Bước 2: Gigapub (Delay 6.5s).
-       - Bước 3: Monetag (Delay 6.5s).
-       - Kết thúc: Nhận Thẻ Safir Cấp 3 (+4 GH/s)!
-    4. Tự động thu hoạch Kho Mỏ (Vault) khi đủ 100% (3600s) hoàn toàn miễn phí.
-    5. Tự động Tap đào đá tối đa 240/240 lượt/ngày.
-    6. Tự động điểm danh hàng ngày Streak (/api/streak/claim).
+  CƠ CHẾ CÀY THẺ SAFIR TIER 3 (+4 GH/s) LIÊN TỤC 24/7:
+    1. Tự động Re-auth Telethon mỗi 25 phút (Chống 401 Unauthorized / Token Expire).
+    2. Chuỗi 3 QC chuẩn Native Moonpool Engine:
+       - Bước 1: Adsgram (Block 54796) + Full Event Tracking (Render/Show/Reward)
+                 + Tự động chờ Server Verification qua /api/ads/adsgram-status (ready: true)
+       - Bước 2: Gigapub (Delay chuẩn 8.5s chống too_early)
+       - Bước 3: Monetag (Delay chuẩn 8.5s)
+       - Kết thúc: Nhận Thẻ Safir Tier 3 (+4 GH/s khai thác 24h liên tục)
+    3. Tự động thu hoạch Kho Mỏ (Vault) khi đủ 100% (3600s).
+    4. Tự động Tap đào đá tối đa 240/240 lượt/ngày.
+    5. Tự động điểm danh hàng ngày Streak (/api/streak/claim).
+    6. Tự động kích hoạt ca chạy tiếp theo (Handover Chaining 24/7).
 =============================================================================
 """
 
@@ -64,9 +65,11 @@ STRING_SESSION = (
 API_BASE = "https://gramstone.46-101-143-24.sslip.io"
 SESSION_FILE_PATH = os.getenv("TELEGRAM_SESSION_PATH", "C:/Users/Administrator/Downloads/kiemtien_autoplay/telepet_acc1.session")
 
+
 def log(tag, msg, color=Fore.WHITE):
     t_str = time.strftime('%H:%M:%S')
-    print(f"{Fore.LIGHTBLACK_EX}[{t_str}]{Style.RESET_ALL} {color}[{tag:<12}]{Style.RESET_ALL} {msg}", flush=True)
+    print(f"{Fore.LIGHTBLACK_EX}[{t_str}]{Style.RESET_ALL} {color}[{tag:<14}]{Style.RESET_ALL} {msg}", flush=True)
+
 
 class GramstoneBot:
     def __init__(self, string_session=None, session_path=None):
@@ -83,7 +86,7 @@ class GramstoneBot:
         self.bonus_ghs = 0.0
         self.total_ghs = 0.0
         
-        # Giả lập phần cứng x-gs-fp chuẩn xác
+        # Giả lập phần cứng chuẩn Android
         self.ua = (
             "Mozilla/5.0 (Linux; Android 14; SM-S928B Build/UP1A.231005.007; wv) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.135 "
@@ -107,16 +110,16 @@ class GramstoneBot:
         self.fp_hash = hashlib.sha256(raw_fp.encode('utf-8')).hexdigest()
 
     async def fetch_tg_init_data(self):
-        log("TELEGRAM", "Đang kết nối Telegram để lấy tgWebAppData Gramstone...", Fore.CYAN)
+        log("TELEGRAM", "Đang kết nối Telegram để lấy tgWebAppData Gramstone tươi mới...", Fore.CYAN)
         client = None
         try:
-            if os.path.exists(self.session_path):
+            if self.session_path and os.path.exists(self.session_path):
                 client = TelegramClient(self.session_path, API_ID, API_HASH)
             else:
                 client = TelegramClient(StringSession(self.string_session), API_ID, API_HASH)
             await client.connect()
             if not await client.is_user_authorized():
-                log("TELEGRAM", "❌ Phiên Telegram không được ủy quyền!", Fore.RED)
+                log("TELEGRAM_ERR", "❌ Phiên Telegram không được ủy quyền!", Fore.RED)
                 await client.disconnect()
                 return False
 
@@ -124,7 +127,7 @@ class GramstoneBot:
             res = await client(RequestWebViewRequest(
                 peer=bot_entity,
                 bot=bot_entity,
-                url="https://gramstone.46-101-143-24.sslip.io/",
+                url=f"{API_BASE}/",
                 platform="android"
             ))
             await client.disconnect()
@@ -147,7 +150,7 @@ class GramstoneBot:
             self.dcs = base64.b64encode(raw.encode('utf-8')).decode('ascii').replace('+', '-').replace('/', '_').rstrip('=')
             
             self.last_init_time = time.time()
-            log("TELEGRAM", f"✅ Lấy init_data thành công cho @{self.username} ({self.user_id})", Fore.GREEN)
+            log("TELEGRAM", f"✅ Đã lấy tgWebAppData mới nhất cho @{self.username} ({self.user_id})!", Fore.GREEN)
             return True
         except Exception as e:
             log("TELEGRAM_ERR", f"Lỗi lấy WebApp Data: {e}", Fore.RED)
@@ -166,17 +169,27 @@ class GramstoneBot:
         }
 
     async def get_valid_auth(self):
+        """
+        Đảm bảo LUÔN CÓ phiên đăng nhập hợp lệ:
+        - Tự động lấy lại init_data nếu chưa có hoặc đã quá 25 phút (1500s).
+        - Nếu authenticate trả về lỗi hoặc 401 -> tự động re-auth Telethon ngay.
+        """
         now = time.time()
         if not self.init_data or (now - self.last_init_time > 1500):
+            log("AUTH_REFRESH", "🔄 Phiên tgWebAppData đã quá 25 phút. Đang làm mới từ Telegram...", Fore.CYAN)
             await self.fetch_tg_init_data()
+
         d = self.authenticate()
         if not d:
+            log("AUTH_RETRY", "⚠️ Phiên không hợp lệ hoặc hết hạn. Đang kết nối lại Telethon lấy token mới...", Fore.YELLOW)
             ok = await self.fetch_tg_init_data()
             if ok:
                 d = self.authenticate()
         return d
 
     def authenticate(self):
+        if not self.init_data:
+            return None
         device_info = {
             "ua": self.ua,
             "platform": self.platform,
@@ -208,8 +221,7 @@ class GramstoneBot:
                     self.bonus_ghs = float(u.get("bonus_ghs", 0))
                     m = data.get("mining", {})
                     self.total_ghs = float(m.get("totalGhs", 100))
-                    total_mined = float(u.get("total_mined", 0.0))
-                    log("AUTH", f"✅ Đăng nhập Gramstone! User: @{self.username} | Số dư: {self.balance:.6f} TON/GRAM | Tốc độ: {self.total_ghs:.1f} GH/s (Bonus: +{self.bonus_ghs} GH/s)", Fore.GREEN)
+                    log("AUTH", f"✅ Đăng nhập Gramstone! User: @{self.username} | Số dư: {self.balance:.6f} TON | Tốc độ: {self.total_ghs:.1f} GH/s (+{self.bonus_ghs} GH/s)", Fore.GREEN)
                     return data
             log("AUTH_ERR", f"Lỗi đăng nhập HTTP {r.status_code}: {r.text[:120]}", Fore.RED)
         except Exception as e:
@@ -239,7 +251,7 @@ class GramstoneBot:
                     else:
                         break
                 elif r.status_code == 429:
-                    log("TAP", "🛑 Đã hoàn thành 240/240 lượt Tap hôm nay!", Fore.MAGENTA)
+                    log("TAP", "🛑 Đã hoàn thành tối đa 240/240 lượt Tap hôm nay!", Fore.MAGENTA)
                     return
                 else:
                     break
@@ -256,7 +268,7 @@ class GramstoneBot:
         
         log("VAULT", f"⛏️ Kho mỏ Vault: {elapsed:.0f}/{claim_interval}s ({pct:.1f}%)", Fore.CYAN)
         if elapsed >= claim_interval:
-            log("VAULT", "🎉 Kho mỏ đã đạt 100%! Tiến hành thu hoạch miễn phí (Ad-free TOPLA)...", Fore.YELLOW)
+            log("VAULT", "🎉 Kho mỏ đã đạt 100%! Tiến hành thu hoạch miễn phí (TOPLA)...", Fore.YELLOW)
             try:
                 r = requests.post(f"{API_BASE}/api/claim", headers=self.get_headers(), json={"telegram_id": self.user_id, "watched_ad": False}, timeout=10)
                 if r.status_code == 200:
@@ -264,7 +276,7 @@ class GramstoneBot:
                     if d.get("ok"):
                         u = d.get("user", {})
                         new_bal = float(u.get("balance", self.balance))
-                        log("VAULT", f"🎉 THU HOẠCH KHO MỎ THÀNH CÔNG! Số dư mới: {new_bal:.6f} TON/GRAM", Fore.GREEN)
+                        log("VAULT", f"🎉 THU HOẠCH KHO MỎ THÀNH CÔNG! Số dư mới: {new_bal:.6f} TON", Fore.GREEN)
                         self.balance = new_bal
                         return True
             except Exception as e:
@@ -273,17 +285,31 @@ class GramstoneBot:
 
     def boost_moonpool_card_chain(self, tier=3):
         """
-        CƠ CHẾ MOONPOOL CHÍNH XÁC 100%:
-        Xem chuỗi 3 QC để nhận Thẻ Safir Cấp 3 (+4 GH/s khai thác liên tục trong 24h).
-        Bước 1: Adsgram (Block 54796) với ping Reward URL.
-        Bước 2: Gigapub (Delay 6.5s).
-        Bước 3: Monetag (Delay 6.5s).
-        Kết thúc: Nhận Thẻ Safir Cấp 3!
+        CƠ CHẾ MOONPOOL CHÍNH XÁC 100% CÓ SERVER-SIDE CONFIRMATION:
+        Bước 1: Bắt đầu ca Thẻ (/api/cards/start).
+        Bước 2: Adsgram (Block 54796) + Full Event Tracking (Render/Show/Reward).
+                + Poll /api/ads/adsgram-status cho tới khi ready: true.
+                + Gửi /api/cards/step (adsgram) với auto retry nếu too_early.
+        Bước 3: Xem QC Gigapub (Delay chuẩn 8.5s).
+                + Gửi /api/cards/step (gigapub).
+        Bước 4: Xem QC Monetag (Delay chuẩn 8.5s).
+                + Gửi /api/cards/step (monetag).
+        Bước 5: Nhận Thẻ Safir Tier 3 (+4 GH/s)!
         """
         log("CARD_MOONPOOL", f"🚀 Kích hoạt quy trình xem QC cày Thẻ Mỏ Tier {tier} (Safir +4 GH/s)...", Fore.CYAN)
         
         # 1. Bắt đầu ca Thẻ
-        r_start = requests.post(f"{API_BASE}/api/cards/start", headers=self.get_headers(), json={"telegram_id": self.user_id, "tier": tier}, timeout=10)
+        try:
+            r_start = requests.post(f"{API_BASE}/api/cards/start", headers=self.get_headers(), json={"telegram_id": self.user_id, "tier": tier}, timeout=10)
+        except Exception as e:
+            log("CARD_WARN", f"Lỗi mạng khi mở thẻ: {e}", Fore.YELLOW)
+            return False, 30
+
+        if r_start.status_code == 401:
+            log("CARD_WARN", "Token hết hạn khi mở thẻ. Yêu cầu re-auth...", Fore.YELLOW)
+            self.init_data = None
+            return False, 5
+            
         if r_start.status_code != 200:
             log("CARD_WARN", f"Chưa thể nhận thẻ mới (HTTP {r_start.status_code})", Fore.YELLOW)
             return False, 60
@@ -303,7 +329,7 @@ class GramstoneBot:
         log("CARD_MOONPOOL", f"Phiên Thẻ Mỏ #{ses_id} đã mở! Bắt đầu chuỗi 3 QC (Adsgram -> Gigapub -> Monetag)...", Fore.CYAN)
 
         try:
-            # --- BƯỚC 1: ADSGRAM (Chuẩn Moonpool Engine với Full Event Tracking) ---
+            # --- BƯỚC 1: ADSGRAM (Full Tracking & Server Verification) ---
             log("STEP1_ADSGRAM", "Bước 1/3: Đang tải quảng cáo Adsgram (Block 54796)...", Fore.YELLOW)
             ad_headers = {
                 'User-Agent': self.ua,
@@ -327,10 +353,10 @@ class GramstoneBot:
                 r_adv = requests.get('https://api.adsgram.ai/adv', headers=ad_headers, params=adv_params, timeout=12)
                 if r_adv.status_code == 200:
                     render_u, show_u, reward_u = None, None, None
-                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'"]+', r_adv.text):
-                        if 'type=render' in u or 'type=Render' in u: render_u = u
-                        elif 'type=show' in u or 'type=Show' in u: show_u = u
-                        elif 'Reward' in u or 'type=Reward' in u: reward_u = u
+                    for u in re.findall(r'https://api\.adsgram\.ai/event\?[^\s\'\"<>]+', r_adv.text):
+                        if 'type=Render' in u: render_u = u
+                        elif 'type=Show' in u: show_u = u
+                        elif 'type=Reward' in u: reward_u = u
 
                     if render_u: 
                         try: requests.get(render_u, headers=ad_headers, timeout=5)
@@ -346,51 +372,85 @@ class GramstoneBot:
                     if reward_u:
                         try: requests.get(reward_u, headers=ad_headers, timeout=8)
                         except Exception: pass
-                    time.sleep(3.5)
             except Exception as e:
                 log("STEP1_WARN", f"Lỗi gọi Adsgram network: {e}", Fore.LIGHTBLACK_EX)
                 time.sleep(8.5)
 
-            counted_s1 = False
+            # Chờ Adsgram server verification
+            log("STEP1_ADSGRAM", "Đang chờ xác nhận máy chủ Adsgram (/api/ads/adsgram-status)...", Fore.YELLOW)
             for _ in range(8):
                 try:
-                    r_s1 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id, "network": "adsgram"}, timeout=10).json()
-                    if r_s1.get("counted"):
-                        counted_s1 = True
-                        log("STEP1_ADSGRAM", "✓ Bước 1/3 Adsgram hoàn thành thành công!", Fore.GREEN)
+                    r_stat = requests.post(f"{API_BASE}/api/ads/adsgram-status", headers=self.get_headers(), json={"telegram_id": self.user_id}, timeout=5)
+                    if r_stat.status_code == 200 and r_stat.json().get("ready"):
+                        log("STEP1_ADSGRAM", "✓ Máy chủ Adsgram đã xác nhận sẵn sàng!", Fore.GREEN)
                         break
                 except Exception:
                     pass
-                time.sleep(2.5)
+                time.sleep(1.5)
+
+            # Báo cáo Step 1 cho Gramstone
+            counted_s1 = False
+            for step_try in range(8):
+                try:
+                    r_s1 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id, "network": "adsgram"}, timeout=10).json()
+                    if r_s1.get("ok") and r_s1.get("counted"):
+                        counted_s1 = True
+                        log("STEP1_ADSGRAM", "✓ Bước 1/3 Adsgram hoàn thành thành công!", Fore.GREEN)
+                        break
+                    code = r_s1.get("code")
+                    if code == "too_early":
+                        ms = int(r_s1.get("retry_in_ms", 1500))
+                        time.sleep((ms / 1000.0) + 0.5)
+                        continue
+                    elif code == "ad_unverified":
+                        time.sleep(1.5)
+                        continue
+                except Exception:
+                    pass
+                time.sleep(2.0)
 
             if not counted_s1:
-                log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram.", Fore.YELLOW)
+                log("STEP1_WARN", "Chưa xác nhận được Bước 1 Adsgram. Kết thúc phiên.", Fore.YELLOW)
                 requests.post(f"{API_BASE}/api/cards/finish", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id}, timeout=10)
                 return False, 30
 
             # --- BƯỚC 2: GIGAPUB ---
-            log("STEP2_GIGAPUB", "Bước 2/3: Đang xem QC Gigapub (6.5s)...", Fore.YELLOW)
-            time.sleep(6.5)
+            log("STEP2_GIGAPUB", "Bước 2/3: Đang xem QC Gigapub (8.5s chuẩn quy định)...", Fore.YELLOW)
+            time.sleep(8.5)
             counted_s2 = False
-            for _ in range(5):
-                r_s2 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id, "network": "gigapub"}, timeout=10).json()
-                if r_s2.get("counted"):
-                    counted_s2 = True
-                    log("STEP2_GIGAPUB", "✓ Bước 2 Gigapub hoàn thành!", Fore.GREEN)
-                    break
-                time.sleep(2)
+            for step_try in range(6):
+                try:
+                    r_s2 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id, "network": "gigapub"}, timeout=10).json()
+                    if r_s2.get("ok") and r_s2.get("counted"):
+                        counted_s2 = True
+                        log("STEP2_GIGAPUB", "✓ Bước 2/3 Gigapub hoàn thành!", Fore.GREEN)
+                        break
+                    if r_s2.get("code") == "too_early":
+                        ms = int(r_s2.get("retry_in_ms", 1500))
+                        time.sleep((ms / 1000.0) + 0.5)
+                        continue
+                except Exception:
+                    pass
+                time.sleep(2.0)
 
             # --- BƯỚC 3: MONETAG ---
-            log("STEP3_MONETAG", "Bước 3/3: Đang xem QC Monetag (6.5s)...", Fore.YELLOW)
-            time.sleep(6.5)
+            log("STEP3_MONETAG", "Bước 3/3: Đang xem QC Monetag (8.5s chuẩn quy định)...", Fore.YELLOW)
+            time.sleep(8.5)
             counted_s3 = False
-            for _ in range(5):
-                r_s3 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id, "network": "monetag"}, timeout=10).json()
-                if r_s3.get("counted"):
-                    counted_s3 = True
-                    log("STEP3_MONETAG", "✓ Bước 3 Monetag hoàn thành!", Fore.GREEN)
-                    break
-                time.sleep(2)
+            for step_try in range(6):
+                try:
+                    r_s3 = requests.post(f"{API_BASE}/api/cards/step", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id, "network": "monetag"}, timeout=10).json()
+                    if r_s3.get("ok") and r_s3.get("counted"):
+                        counted_s3 = True
+                        log("STEP3_MONETAG", "✓ Bước 3/3 Monetag hoàn thành!", Fore.GREEN)
+                        break
+                    if r_s3.get("code") == "too_early":
+                        ms = int(r_s3.get("retry_in_ms", 1500))
+                        time.sleep((ms / 1000.0) + 0.5)
+                        continue
+                except Exception:
+                    pass
+                time.sleep(2.0)
 
             # --- KẾT THÚC VÀ NHẬN THẺ SAFIR CẤP 3 ---
             r_fin = requests.post(f"{API_BASE}/api/cards/finish", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id}, timeout=10).json()
@@ -398,7 +458,7 @@ class GramstoneBot:
                 c = r_fin.get("card", {})
                 u = r_fin.get("user", {})
                 self.bonus_ghs = u.get("bonus_ghs", self.bonus_ghs)
-                log("CARD_SUCCESS", f"🎉🎉🎉 ĐÃ NHẬN THÀNH CÔNG THẺ SAFIR TIER 3 (+{c.get('ghs', 4)} GH/s)! Tổng Bonus GH/s: +{self.bonus_ghs}", Fore.GREEN)
+                log("CARD_SUCCESS", f"🎉🎉🎉 ĐÃ NHẬN THÀNH CÔNG THẺ SAFIR TIER {c.get('tier', 3)} (+{c.get('ghs', 4)} GH/s)! Tổng Bonus GH/s: +{self.bonus_ghs}", Fore.GREEN)
                 return True, 0
             else:
                 log("CARD_WARN", f"Hoàn tất chuỗi: {r_fin.get('close_reason', 'done')}", Fore.YELLOW)
@@ -407,12 +467,9 @@ class GramstoneBot:
             try: requests.post(f"{API_BASE}/api/cards/finish", headers=self.get_headers(), json={"telegram_id": self.user_id, "session_id": ses_id}, timeout=10)
             except Exception: pass
         return False, 30
+
     async def run_cycle(self):
-        ok = await self.fetch_tg_init_data()
-        if not ok:
-            return
-        
-        auth_data = self.authenticate()
+        auth_data = await self.get_valid_auth()
         if not auth_data:
             return
 
@@ -446,6 +503,7 @@ def trigger_next_shift(workflow_file="game1_gramstone.yml"):
         log("HANDOVER", f"Lỗi retrigger: {e}", Fore.RED)
     return False
 
+
 async def run_loop_247(bot_instance, interval_mins=0):
     raw_rt = os.getenv("MAX_RUNTIME_SECONDS", "17500").strip()
     max_runtime = int(raw_rt) if raw_rt.isdigit() else 17500
@@ -456,9 +514,9 @@ async def run_loop_247(bot_instance, interval_mins=0):
     
     log("CONTINUOUS", "🔥 CHẾ ĐỘ CÀY QUẢNG CÁO THẺ MỎ SAFIR TIER 3 LIÊN TỤC 24/7 ĐÃ BẬT!", Fore.GREEN)
     
-    ok = await bot_instance.fetch_tg_init_data()
-    if not ok:
-        log("INIT_ERR", "Không thể lấy init_data ban đầu.", Fore.RED)
+    auth_data = await bot_instance.get_valid_auth()
+    if not auth_data:
+        log("INIT_ERR", "Không thể xác thực ban đầu.", Fore.RED)
         return
 
     while True:
@@ -469,14 +527,18 @@ async def run_loop_247(bot_instance, interval_mins=0):
             break
 
         now = time.time()
+        # Đảm bảo LUÔN CÓ auth hợp lệ trước mỗi lượt (tự động re-auth từ Telethon nếu token quá 25 phút)
+        auth_data = await bot_instance.get_valid_auth()
+        if not auth_data:
+            log("RETRY", "Chờ 15s trước khi thử lại kết nối Telegram...", Fore.YELLOW)
+            await asyncio.sleep(15)
+            continue
         
         # 1. Kiểm tra Kho Mỏ Vault & Streak định kỳ mỗi 5 phút
         if now - last_vault_check >= 300:
             try:
-                auth_data = await bot_instance.get_valid_auth()
-                if auth_data:
-                    bot_instance.check_and_claim_vault(auth_data)
-                    bot_instance.claim_streak()
+                bot_instance.check_and_claim_vault(auth_data)
+                bot_instance.claim_streak()
                 last_vault_check = now
             except Exception as e:
                 log("VAULT_ERR", f"Lỗi check vault: {e}", Fore.RED)
@@ -503,6 +565,8 @@ async def run_loop_247(bot_instance, interval_mins=0):
         except Exception as e:
             log("CARD_ERR", f"Lỗi cày thẻ: {e}", Fore.RED)
             await asyncio.sleep(15)
+
+
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Bot Auto Gramstone ($GRAM/$TON) 24/7")
@@ -521,7 +585,7 @@ async def main():
 
     print(Fore.CYAN + f"""
 =============================================================================
-  BOT AUTO GRAMSTONE ($GRAM / $TON) 24/7 - CHUẨN CƠ CHẾ MỚI MOONPOOL 100%
+  BOT AUTO GRAMSTONE ($GRAM / $TON) 24/7 - BẢN FIX TRIỆT ĐỂ MOONPOOL 2026
   Acc: {args.acc} | Tự động Thu Hoạch Vault 100% | Cày Thẻ Mỏ Safir Tier 3 | Tap Đào Đá
 =============================================================================
     """ + Style.RESET_ALL)
@@ -531,6 +595,7 @@ async def main():
         await run_loop_247(bot, interval_mins=args.loop)
     else:
         await bot.run_cycle()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
