@@ -8,12 +8,13 @@
   
   TÍNH NĂNG TỰ ĐỘNG HÓA TOÀN DIỆN & CHUẨN XÁC:
     1. THU HOẠCH KÉT SẮT VAULT (/api/claim) định kỳ khi sẵn sàng.
-    2. CHUYÊN CÀY CARD GPU TIER 3 (+12⚡ POWER) theo chuẩn Native Moonpool:
+    2. CHUYÊN CÀY CARD GPU (TIER 3 / TIER 2 / TIER 1) theo chuẩn Native Moonpool:
+       - Tự động phát hiện dung lượng giàn Rack và chọn Tier cao nhất vừa slot.
        - Tự động tiếp tục open_session dở dang hoặc chờ cooldown thông minh.
        - Bước 1: Adsgram (Block 58154) với ping Reward URL thực tế.
-       - Bước 2: Gigapub (Delay 6.5s).
-       - Bước 3: Monetag (Delay 6.5s).
-       - Kết thúc: Đưa Card GPU Tier 3 (+12⚡) vào giàn máy đào Rack!
+       - Bước 2: Gigapub (Delay 6.5s) nếu Tier >= 2.
+       - Bước 3: Monetag (Delay 6.5s) nếu Tier == 3.
+       - Kết thúc: Đưa Card GPU mới vào giàn máy đào Rack!
     3. NHẬN THƯỞNG DAILY STREAK (/api/tasks/streak/claim) khi đủ điều kiện.
     4. KIỂM TRA & DUY TRÌ GIÀN MÁY ĐÀO RACK (/api/rack/start) tối ưu hóa công suất.
 =============================================================================
@@ -182,22 +183,20 @@ class RedRigBot:
                 log("CLAIM_ERR", f"Lỗi thu hoạch két sắt: {e}", Fore.RED)
         return state
 
-    def boost_moonpool_gpu_chain(self, state, tier=3):
+    def boost_moonpool_gpu_chain(self, state):
         """
         CƠ CHẾ MOONPOOL CHUẨN XÁC TRÊN REDRIG:
-        Xem chuỗi 3 QC để nhận Card GPU Tier 3 (+12⚡ Power khai thác trong 24h).
-        Bước 1: Adsgram (Block 58154) với ping Reward URL thực tế.
-        Bước 2: Gigapub (Delay 6.5s).
-        Bước 3: Monetag (Delay 6.5s).
-        Kết thúc: Nhận Card GPU Tier 3 (+12⚡ Power)!
+        Tự động chọn Card Tier cao nhất (Tier 3 -> Tier 2 -> Tier 1) phù hợp với khe trống của Rack.
+        Xem chuỗi QC theo tier (Adsgram -> Gigapub -> Monetag).
+        Đưa Card GPU mới vào giàn máy đào Rack!
         """
-        log("GPU_MOONPOOL", f"🚀 Kích hoạt quy trình xem QC cày Card GPU Tier {tier} (+12⚡ Power)...", Fore.CYAN)
-        
         cfg = state.get("config", {})
         block_id = cfg.get("networks", {}).get("adsgram", {}).get("block_id") or "58154"
         srv_time = state.get("server_time", int(time.time() * 1000))
 
         ses_id = None
+        tier = 3
+        chain = ["adsgram", "gigapub", "monetag"]
         start_step = 1
 
         # 1. Kiểm tra session dở dang
@@ -206,26 +205,39 @@ class RedRigBot:
             exp = open_ses.get("expires_at", 0)
             if exp > srv_time:
                 ses_id = open_ses.get("id")
+                tier = open_ses.get("card_tier", 3)
+                chain = open_ses.get("chain", ["adsgram", "gigapub", "monetag"])
                 steps_done = open_ses.get("steps_done", 0)
                 start_step = steps_done + 1
-                log("GPU_MOONPOOL", f"Phát hiện ca GPU #{ses_id} đang mở (Đã xong bước {steps_done}/3). Tiếp tục từ bước {start_step}!", Fore.MAGENTA)
+                log("GPU_MOONPOOL", f"Phát hiện ca GPU #{ses_id} (Tier {tier}) đang mở (Đã xong bước {steps_done}/{len(chain)}). Tiếp tục từ bước {start_step}!", Fore.MAGENTA)
             else:
                 log("GPU_MOONPOOL", f"Phiên GPU #{open_ses.get('id')} đã hết hạn. Đang đóng...", Fore.YELLOW)
                 requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": open_ses.get("id")}, timeout=8)
                 time.sleep(2)
 
-        # 2. Nếu chưa có session, kiểm tra Cooldown và khởi tạo ca mới
+        # 2. Nếu chưa có session, chọn Tier tối ưu theo khe trống của Giàn Rack
         if not ses_id:
-            # Kiểm tra thời gian hồi chiêu của Card Tier 3
             cards = state.get("cards", [])
-            target_card = next((c for c in cards if c.get("tier") == tier), {})
-            cd_left = target_card.get("cooldown_left_sec", 0)
+            # Tìm tier cao nhất mà fits == True
+            fit_tier = None
+            for t in [3, 2, 1]:
+                c_info = next((c for c in cards if c.get("tier") == t), {})
+                if c_info.get("fits"):
+                    fit_tier = c_info
+                    tier = t
+                    chain = c_info.get("chain", ["adsgram"])
+                    break
 
+            if not fit_tier:
+                log("GPU_MOONPOOL", "🖥️ Giàn máy đào Rack đã lấp đầy 100% tất cả các khe cắm! Đang vận hành ở công suất tối đa.", Fore.GREEN)
+                return state
+
+            cd_left = fit_tier.get("cooldown_left_sec", 0)
             if cd_left > 0:
-                log("GPU_COOLDOWN", f"⏳ Ca cày GPU Tier 3 đang hồi chiêu (còn {cd_left}s). Đang tự động chờ...", Fore.YELLOW)
+                log("GPU_COOLDOWN", f"⏳ Ca cày GPU Tier {tier} đang hồi chiêu (còn {cd_left}s). Đang tự động chờ...", Fore.YELLOW)
                 time.sleep(cd_left + 2)
 
-            log("GPU_MOONPOOL", f"Bắt đầu mở ca cày Card GPU Tier {tier} mới (/api/fish/start)...", Fore.CYAN)
+            log("GPU_MOONPOOL", f"🚀 Kích hoạt quy trình xem QC cày Card GPU Tier {tier} (+{fit_tier.get('power')}⚡ Power)...", Fore.CYAN)
             r_start = requests.post(f"{API_BASE}/api/fish/start", headers=self.get_headers(), json={"tier": tier}, timeout=10)
             
             if r_start.status_code == 429:
@@ -244,13 +256,14 @@ class RedRigBot:
 
             ses = d_start.get("session", {})
             ses_id = ses.get("id")
+            chain = ses.get("chain", chain)
             start_step = 1
-            log("GPU_MOONPOOL", f"✅ Khởi tạo thành công Phiên GPU #{ses_id}! Bắt đầu chuỗi 3 QC...", Fore.GREEN)
+            log("GPU_MOONPOOL", f"✅ Khởi tạo thành công Phiên GPU #{ses_id}! Chuỗi {len(chain)} QC: {' -> '.join(chain)}", Fore.GREEN)
 
         try:
-            # --- BƯỚC 1: ADSGRAM ---
-            if start_step <= 1:
-                log("STEP1_ADSGRAM", f"Bước 1/3: Đang tải quảng cáo Adsgram (Block {block_id})...", Fore.YELLOW)
+            # --- BƯỚC 1: ADSGRAM (nếu có trong chuỗi) ---
+            if "adsgram" in chain and start_step <= 1:
+                log("STEP1_ADSGRAM", f"Bước 1/{len(chain)}: Đang tải quảng cáo Adsgram (Block {block_id})...", Fore.YELLOW)
                 ad_headers = {
                     'User-Agent': self.ua,
                     'Origin': API_BASE,
@@ -287,7 +300,7 @@ class RedRigBot:
                     r_s1 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "adsgram"}, timeout=10).json()
                     if r_s1.get("counted"):
                         counted_s1 = True
-                        log("STEP1_ADSGRAM", "✓ Bước 1 Adsgram hoàn thành thành công!", Fore.GREEN)
+                        log("STEP1_ADSGRAM", f"✓ Bước 1/{len(chain)} Adsgram hoàn thành thành công!", Fore.GREEN)
                         break
                     time.sleep(2)
 
@@ -296,46 +309,48 @@ class RedRigBot:
                     requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=8)
                     return state
 
-            # --- BƯỚC 2: GIGAPUB ---
-            if start_step <= 2:
-                log("STEP2_GIGAPUB", "Bước 2/3: Đang xem QC Gigapub (6.5s)...", Fore.YELLOW)
+            # --- BƯỚC 2: GIGAPUB (nếu có trong chuỗi) ---
+            if "gigapub" in chain and start_step <= 2:
+                step_idx = chain.index("gigapub") + 1
+                log("STEP2_GIGAPUB", f"Bước {step_idx}/{len(chain)}: Đang xem QC Gigapub (6.5s)...", Fore.YELLOW)
                 time.sleep(6.5)
                 counted_s2 = False
                 for _ in range(5):
                     r_s2 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "gigapub"}, timeout=10).json()
                     if r_s2.get("counted"):
                         counted_s2 = True
-                        log("STEP2_GIGAPUB", "✓ Bước 2 Gigapub hoàn thành thành công!", Fore.GREEN)
+                        log("STEP2_GIGAPUB", f"✓ Bước {step_idx}/{len(chain)} Gigapub hoàn thành thành công!", Fore.GREEN)
                         break
                     time.sleep(2)
 
                 if not counted_s2:
-                    log("STEP2_WARN", "Chưa xác nhận được Bước 2 Gigapub.", Fore.YELLOW)
+                    log("STEP2_WARN", "Chưa xác nhận được Bước Gigapub.", Fore.YELLOW)
 
-            # --- BƯỚC 3: MONETAG ---
-            if start_step <= 3:
-                log("STEP3_MONETAG", "Bước 3/3: Đang xem QC Monetag (6.5s)...", Fore.YELLOW)
+            # --- BƯỚC 3: MONETAG (nếu có trong chuỗi) ---
+            if "monetag" in chain and start_step <= 3:
+                step_idx = chain.index("monetag") + 1
+                log("STEP3_MONETAG", f"Bước {step_idx}/{len(chain)}: Đang xem QC Monetag (6.5s)...", Fore.YELLOW)
                 time.sleep(6.5)
                 counted_s3 = False
                 for _ in range(5):
                     r_s3 = requests.post(f"{API_BASE}/api/fish/step", headers=self.get_headers(), json={"session_id": ses_id, "network": "monetag"}, timeout=10).json()
                     if r_s3.get("counted"):
                         counted_s3 = True
-                        log("STEP3_MONETAG", "✓ Bước 3 Monetag hoàn thành thành công!", Fore.GREEN)
+                        log("STEP3_MONETAG", f"✓ Bước {step_idx}/{len(chain)} Monetag hoàn thành thành công!", Fore.GREEN)
                         break
                     time.sleep(2)
 
                 if not counted_s3:
-                    log("STEP3_WARN", "Chưa xác nhận được Bước 3 Monetag.", Fore.YELLOW)
+                    log("STEP3_WARN", "Chưa xác nhận được Bước Monetag.", Fore.YELLOW)
 
-            # --- KẾT THÚC VÀ NHẬN CARD GPU CẤP 3 (+12⚡ POWER) ---
+            # --- KẾT THÚC VÀ NHẬN CARD GPU VÀO RACK ---
             r_fin = requests.post(f"{API_BASE}/api/fish/finish", headers=self.get_headers(), json={"session_id": ses_id}, timeout=10).json()
             if r_fin.get("ok"):
                 f = r_fin.get("fish", {})
                 nst = r_fin.get("state", {})
                 tot_pw = nst.get("power", {}).get("total", self.power)
                 earn_new = nst.get("earn", {}).get("per_hour", self.earn_h)
-                log("GPU_SUCCESS", f"🎉🎉🎉 ĐÃ NHẬN THÀNH CÔNG CARD GPU TIER {f.get('tier', 3)} (+{f.get('power', 12)}⚡)! Tổng Power: {tot_pw}⚡ ({float(earn_new):.8f} TON/h)", Fore.GREEN)
+                log("GPU_SUCCESS", f"🎉🎉🎉 ĐÃ NHẬN THÀNH CÔNG CARD GPU TIER {f.get('tier', tier)} (+{f.get('power')}⚡)! Tổng Power: {tot_pw}⚡ ({float(earn_new):.8f} TON/h)", Fore.GREEN)
                 return nst
             else:
                 log("GPU_WARN", f"Kết thúc chuỗi: {r_fin.get('close_reason', 'done')}", Fore.YELLOW)
@@ -409,8 +424,8 @@ class RedRigBot:
         # 1. Thu hoạch két sắt TON
         state = self.check_and_claim_vault(state)
         
-        # 2. Cày Card GPU Tier 3 (+12⚡ Power) theo chuẩn Native Moonpool
-        state = self.boost_moonpool_gpu_chain(state, tier=3)
+        # 2. Cày Card GPU theo chuẩn Native Moonpool (Tự động chọn Tier phù hợp với Rack)
+        state = self.boost_moonpool_gpu_chain(state)
         
         # 3. Kiểm tra & Nhận Daily Streak
         self.check_and_claim_streak(state)
@@ -422,7 +437,7 @@ async def main():
     print(Fore.YELLOW + """
 =============================================================================
   BOT AUTO REDRIG ($TON) 24/7 - CHUẨN CƠ CHẾ MOONPOOL 100%
-  Tự động Thu Hoạch Két Sắt Mỗi Giờ | Cày Card GPU Tier 3 (+12⚡ Power)
+  Tự động Thu Hoạch Két Sắt Mỗi Giờ | Cày Card GPU Phù Hợp Giàn Máy Đào
 =============================================================================
     """ + Style.RESET_ALL)
     bot = RedRigBot()
